@@ -1,0 +1,17 @@
+# Node.js dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Uploaded files
+uploads/
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+
+# Vercel deployment config
+vercel.json
