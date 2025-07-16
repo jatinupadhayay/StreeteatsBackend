@@ -40,7 +40,7 @@ app.use(
         process.env.FRONTEND_URL,
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://street-eats-frontend.vercel.app",
+        "https://streeteats-frontend-kw1c.vercel.app/",
       ]
       if (allowed.some((url) => origin.includes(url))) {
         return callback(null, true)
@@ -202,12 +202,11 @@ app.use("*", (req, res) => {
 })
 
 // ✅ Start server (for local dev)
-if (process.env.NODE_ENV !== "production") {
-  const PORT = process.env.PORT || 5000
-  server.listen(PORT, () => {
-    console.log(`🟢 Server running at http://localhost:${PORT}`)
-  })
-}
+const PORT = process.env.PORT || 5000
+server.listen(PORT, () => {
+  console.log(`🟢 Server running at http://localhost:${PORT}`)
+})
+
 
 // ✅ Export for Vercel/serverless
 module.exports = app
