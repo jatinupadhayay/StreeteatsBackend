@@ -9,7 +9,7 @@ const { sendWelcomeEmail, sendVendorApprovalEmail } = require("../utils/emailSer
 const upload = require("../middleware/upload")
 
 const router = express.Router()
-
+console.log("✅ /api/auth router loaded")
 // ------------------------- CUSTOMER REGISTRATION -------------------------
 router.post("/register/customer", async (req, res) => {
   try {
@@ -308,6 +308,7 @@ router.post(
 );
 // ------------------------- LOGIN -------------------------
 router.post("/login", async (req, res) => {
+  console.log("✅ /api/auth router loaded")
   try {
     const { email, password, role } = req.body
 
