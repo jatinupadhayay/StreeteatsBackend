@@ -7,10 +7,13 @@ const http = require("http")
 const socketIo = require("socket.io")
 require("dotenv").config()
 
+// ✅ Import models
+const VendorModel = require("./models/Vendor") // make sure the path is correct
+
 const app = express()
 const server = http.createServer(app)
 
-// Socket.io setup for Vercel
+// ✅ Initialize Socket.IO
 const io = socketIo(server, {
   cors: {
     origin: process.env.FRONTEND_URL || "*",
@@ -20,137 +23,134 @@ const io = socketIo(server, {
   transports: ["websocket", "polling"],
 })
 
-// Middleware
+// ✅ Security headers
 app.use(
   helmet({
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: false,
-  }),
+  })
 )
 
-// Enhanced CORS configuration
+// ✅ CORS settings
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, etc.)
       if (!origin) return callback(null, true)
-
-      const allowedOrigins = [
+      const allowed = [
         process.env.FRONTEND_URL,
         "http://localhost:3000",
         "http://localhost:3001",
         "https://street-eats-frontend.vercel.app",
-        "https://your-frontend-domain.vercel.app",
       ]
-
-      if (allowedOrigins.some((allowedOrigin) => origin.includes(allowedOrigin))) {
-        callback(null, true)
-      } else {
-        callback(null, true) // Allow all origins for now
+      if (allowed.some((url) => origin.includes(url))) {
+        return callback(null, true)
       }
+      return callback(null, true) // Allow all for now
     },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
-  }),
+  })
 )
-
-// Handle preflight requests
 app.options("*", cors())
 
+// ✅ Body parsing
 app.use(express.json({ limit: "10mb" }))
 app.use(express.urlencoded({ extended: true, limit: "10mb" }))
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Increased limit
-  message: "Too many requests from this IP",
-  standardHeaders: true,
-  legacyHeaders: false,
-})
-app.use("/api/", limiter)
+// ✅ Rate limiting
+app.use(
+  "/api/",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 1000,
+    message: "Too many requests from this IP",
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+)
 
-// Database connection with better error handling
+// ✅ MongoDB connection
 let isConnected = false
-
 const connectDB = async () => {
-  if (isConnected) {
-    return
-  }
-
+  if (isConnected) return
   try {
     const db = await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       maxPoolSize: 10,
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
     })
-
     isConnected = db.connections[0].readyState === 1
     console.log("✅ Connected to MongoDB")
   } catch (error) {
-    console.error("❌ MongoDB connection error:", error)
-    // Don't throw error, continue without DB for now
+    console.error("❌ MongoDB connection error:", error.message)
   }
 }
-
-// Connect to database
 connectDB()
 
-// Socket.io connection handling
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id)
+// ✅ SOCKET.IO CONNECTION
+io.on("connection", async (socket) => {
+  const { userId, userRole } = socket.handshake.auth
+  console.log("🔌 Client connected:", socket.id)
+  console.log("🔐 Auth:", socket.handshake.auth)
 
-  // Join rooms for real-time updates
+  try {
+    if (userRole === "vendor") {
+      const vendor = await VendorModel.findOne({ userId })
+      if (vendor) {
+        const vendorRoom = `vendor-${vendor._id}`
+        socket.join(vendorRoom)
+        console.log(`🏪 Vendor user ${userId} joined room: ${vendorRoom}`)
+      } else {
+        console.warn(`⚠️ No vendor found for userId: ${userId}`)
+      }
+    }
+  } catch (err) {
+    console.error("❌ Error during vendor room join:", err.message)
+  }
+
   socket.on("join-vendor", (vendorId) => {
-    socket.join(`vendor-${vendorId}`)
-    console.log(`Vendor ${vendorId} joined room`)
+    const room = `vendor-${vendorId}`
+    socket.join(room)
+    console.log(`🏪 Vendor manually joined room: ${room}`)
   })
 
   socket.on("join-customer", (customerId) => {
-    socket.join(`customer-${customerId}`)
-    console.log(`Customer ${customerId} joined room`)
+    const room = `customer-${customerId}`
+    socket.join(room)
+    console.log(`👤 Customer joined room: ${room}`)
   })
 
   socket.on("join-delivery", (deliveryId) => {
-    socket.join(`delivery-${deliveryId}`)
-    console.log(`Delivery partner ${deliveryId} joined room`)
+    const room = `delivery-${deliveryId}`
+    socket.join(room)
+    console.log(`🚚 Delivery joined room: ${room}`)
   })
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id)
+  socket.on("ping-test", () => {
+    console.log("📡 Ping received from:", socket.id)
+    socket.emit("pong-test", "👋 Pong from server")
+  })
+
+  socket.on("disconnect", (reason) => {
+    console.log("❌ Disconnected:", socket.id, "Reason:", reason)
+  })
+
+  socket.on("error", (err) => {
+    console.error("🔥 Socket error:", err.message)
   })
 })
 
-// Make io available to routes
+// ✅ Attach io to app
 app.set("io", io)
 
-// Health check endpoints
+// ✅ Health check endpoints
 app.get("/", (req, res) => {
   res.json({
     message: "🍕 Street Eats API is running!",
     status: "OK",
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || "development",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-  })
-})
-
-app.get("/api", (req, res) => {
-  res.json({
-    message: "Street Eats API v1.0",
-    status: "OK",
-    endpoints: {
-      auth: "/api/auth",
-      vendors: "/api/vendors",
-      orders: "/api/orders",
-      delivery: "/api/delivery",
-      payments: "/api/payments",
-      upload: "/api/upload",
-    },
-    methods: ["GET", "POST", "PUT", "DELETE"],
   })
 })
 
@@ -163,77 +163,51 @@ app.get("/api/health", (req, res) => {
   })
 })
 
-// API Routes with proper error handling
+// ✅ Routes
 try {
   app.use("/api/auth", require("./routes/auth"))
   app.use("/api/vendors", require("./routes/vendors"))
-  app.use("api/customer"),require("./routes/customer")
   app.use("/api/orders", require("./routes/orders"))
   app.use("/api/delivery", require("./routes/delivery"))
   app.use("/api/payments", require("./routes/payments"))
   app.use("/api/upload", require("./routes/upload"))
-} catch (error) {
-  console.error("Route loading error:", error)
+} catch (err) {
+  console.error("❌ Failed to load routes:", err.message)
 }
 
-// Catch-all for API routes that don't exist
+// ✅ Unknown API endpoint handler
 app.all("/api/*", (req, res) => {
   res.status(404).json({
     message: "API endpoint not found",
     method: req.method,
     path: req.path,
-    availableEndpoints: [
-      "GET /api/health",
-      "POST /api/auth/login",
-      "POST /api/auth/register/customer",
-      "GET /api/customer",
-      "GET /api/vendors",
-      "POST /api/orders",
-    ],
   })
 })
 
-// Global error handling middleware
+// ✅ Global error handler
 app.use((err, req, res, next) => {
-  console.error("Global error:", err.stack)
-
-  // Handle specific error types
-  if (err.name === "ValidationError") {
-    return res.status(400).json({
-      message: "Validation Error",
-      error: err.message,
-    })
-  }
-
-  if (err.name === "CastError") {
-    return res.status(400).json({
-      message: "Invalid ID format",
-      error: err.message,
-    })
-  }
-
+  console.error("🔥 Server error:", err.stack)
   res.status(500).json({
-    message: "Something went wrong!",
+    message: "Something went wrong",
     error: process.env.NODE_ENV === "development" ? err.message : "Internal server error",
   })
 })
 
-// 404 handler for non-API routes
+// ✅ Catch-all
 app.use("*", (req, res) => {
   res.status(404).json({
     message: "Route not found",
-    method: req.method,
-    path: req.path,
-    suggestion: "Check if you meant to access /api/* endpoints",
+    suggestion: "Check if you meant to access /api/*",
   })
 })
 
-// For Vercel deployment
+// ✅ Start server (for local dev)
 if (process.env.NODE_ENV !== "production") {
   const PORT = process.env.PORT || 5000
   server.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`)
+    console.log(`🟢 Server running at http://localhost:${PORT}`)
   })
 }
 
+// ✅ Export for Vercel/serverless
 module.exports = app

@@ -6,6 +6,7 @@ const auth = require("../middleware/auth")
 const upload = require("../middleware/upload")
 const ErrorHandler = require("../utils/errorHandler")
 
+
 const router = express.Router()
 
 // Helper function to calculate distance (Haversine formula)
@@ -23,7 +24,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 // GET ALL VENDORS (For customers)
 router.get("/", async (req, res, next) => {
   try {
-    const { cuisine, search, lat, lng, radius = 10 } = req.query
+    const { cuisine, search, lat, lng, radius } = req.query
 
     const query = { status: "approved", isActive: true }
 
@@ -42,11 +43,12 @@ router.get("/", async (req, res, next) => {
     }
 
     let vendors = await Vendor.find(query).populate("userId", "name email phone")
+    console.log(vendors)
 
     // Filter by location if coordinates provided
     if (lat && lng) {
-      const userLat = Number.parseFloat(lat)
-      const userLng = Number.parseFloat(lng)
+      const userLat = Number.parseFloat(lng)
+      const userLng = Number.parseFloat(lat)
       const searchRadius = Number.parseFloat(radius)
 
       if (isNaN(userLat) || isNaN(userLng) || isNaN(searchRadius)) {
@@ -70,7 +72,8 @@ router.get("/", async (req, res, next) => {
     res.json({
       success: true,
       vendors: vendors.map((vendor) => ({
-        id: vendor._id,
+        id:  vendor._id,
+        _id: vendor.userId,
         shopName: vendor.shopName,
         shopDescription: vendor.shopDescription,
         cuisine: vendor.cuisine,
@@ -88,9 +91,9 @@ router.get("/", async (req, res, next) => {
     next(new ErrorHandler("Failed to fetch vendors", 500))
   }
 })
-
-// GET SINGLE VENDOR (For customers)
+ 
 router.get("/:id", async (req, res, next) => {
+  
   try {
     const vendor = await Vendor.findById(req.params.id).populate("userId", "name email phone")
 
@@ -101,16 +104,17 @@ router.get("/:id", async (req, res, next) => {
     res.json({
       success: true,
       vendor: {
-        id: vendor._id,
+        id:  vendor._id,
+        _id: vendor.userId,
         shopName: vendor.shopName,
         shopDescription: vendor.shopDescription,
         cuisine: vendor.cuisine,
         address: vendor.address,
-        contact: vendor.contact,
-        operationalHours: vendor.operationalHours,
-        deliveryRadius: vendor.deliveryRadius,
         rating: vendor.rating,
+        deliveryRadius: vendor.deliveryRadius,
+        operationalHours: vendor.operationalHours,
         images: vendor.images,
+        isActive: vendor.isActive,
         menu: vendor.menu.filter((item) => item.isAvailable),
         totalOrders: vendor.totalOrders,
       },
@@ -125,134 +129,174 @@ router.get("/:id", async (req, res, next) => {
 })
 
 // GET VENDOR DASHBOARD (For vendors)
+// GET VENDOR DASHBOARD (For vendors)
 router.get("/dashboard/stats", auth, async (req, res, next) => {
   try {
-    if (req.user.role !== "vendor") {
-      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
+    // 1. Verify user is a vendor using the new isVendor flag
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403));
     }
 
-    const vendor = await Vendor.findOne({ userId: req.user.id }) // Use req.user.id from auth middleware
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId });
+    console
     if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found for this user.", 404))
+      return next(new ErrorHandler("Vendor profile not available", 404));
     }
 
-    // Get today's orders
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const tomorrow = new Date(today)
-    tomorrow.setDate(tomorrow.getDate() + 1)
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-    const todayOrders = await Order.find({
-      vendorId: vendor._id,
-      createdAt: { $gte: today, $lt: tomorrow },
-    })
+    let todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, averageRatingResult, topDishes;
 
-    // Get pending orders
-    const pendingOrders = await Order.find({
-      vendorId: vendor._id,
-      status: { $in: ["placed", "accepted", "preparing"] },
-    }).populate("customerId", "name phone")
+    try {
+      [todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, averageRatingResult, topDishes] = 
+        await Promise.all([
+          Order.find({
+            vendorId: vendor._id,
+            createdAt: { $gte: today, $lt: tomorrow },
+            status: { $ne: "cancelled" }
+          }).lean(),
+          
+          Order.find({
+            vendorId: vendor._id,
+            status: { $in: ["placed", "accepted", "preparing"] }
+          }).populate("customerId", "name phone email").lean(),
+          
+          Order.find({
+            vendorId: vendor._id,
+            createdAt: { $gte: sevenDaysAgo },
+            status: "delivered"
+          }).lean(),
+          
+          Review.find({ vendorId: vendor._id })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate("customerId", "name")
+            .lean(),
+          
+          Review.countDocuments({ vendorId: vendor._id }),
+          
+          Review.aggregate([
+            { $match: { vendorId: vendor._id } },
+            { $group: { _id: null, avgRating: { $avg: "$overall" } } }
+          ]),
+          
+          Order.aggregate([
+            { 
+              $match: { 
+                vendorId: vendor._id, 
+                createdAt: { $gte: sevenDaysAgo },
+                status: "delivered" 
+              } 
+            },
+            { $unwind: "$items" },
+            {
+              $group: {
+                _id: "$items.menuItemId",
+                name: { $first: "$items.name" },
+                orders: { $sum: "$items.quantity" },
+                revenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } },
+              }
+            },
+            { $sort: { revenue: -1 } },
+            { $limit: 5 }
+          ])
+        ]);
+    } catch (queryError) {
+      console.error("Dashboard queries failed:", queryError);
+      return next(new ErrorHandler("Failed to load dashboard data", 500));
+    }
 
-    // Calculate stats
-    const todayRevenue = todayOrders.reduce((sum, order) => sum + order.pricing.total, 0)
-    const todayOrderCount = todayOrders.length
-    const avgOrderValue = todayOrderCount > 0 ? todayRevenue / todayOrderCount : 0
+    const todayRevenue = todayOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0;
+    const todayOrderCount = todayOrders?.length || 0;
+    const avgOrderValue = todayOrderCount > 0 ? todayRevenue / todayOrderCount : 0;
+    
+    const weeklyRevenue = weeklyOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0;
+    const weeklyOrderCount = weeklyOrders?.length || 0;
 
-    // Weekly Stats (last 7 days)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-    const weeklyOrders = await Order.find({
-      vendorId: vendor._id,
-      createdAt: { $gte: sevenDaysAgo },
-      status: "delivered",
-    })
-    const weeklyRevenue = weeklyOrders.reduce((sum, order) => sum + order.pricing.total, 0)
-    const weeklyOrderCount = weeklyOrders.length
-    // For growth, you'd need previous week's data. For simplicity, we'll use a placeholder or calculate based on current week.
-    const weeklyGrowth = 12.5 // Placeholder for now
+    let averageRating = 0;
+    try {
+      averageRating = averageRatingResult?.length > 0 
+        ? Number.parseFloat(averageRatingResult[0].avgRating?.toFixed(1) || 0) 
+        : 0;
+    } catch (ratingError) {
+      console.error("Rating calculation failed:", ratingError);
+      averageRating = 0;
+    }
 
-    // Top Performing Dishes
-    const topDishes = await Order.aggregate([
-      { $match: { vendorId: vendor._id, createdAt: { $gte: today }, status: "delivered" } },
-      { $unwind: "$items" },
-      {
-        $group: {
-          _id: "$items.menuItemId",
-          name: { $first: "$items.name" },
-          orders: { $sum: "$items.quantity" },
-          revenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } },
-        },
-      },
-      { $sort: { revenue: -1 } },
-      { $limit: 5 },
-    ])
+    let growthPercentage = 0;
+    try {
+      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      const lastWeekOrders = await Order.find({
+        vendorId: vendor._id,
+        createdAt: { $gte: fourteenDaysAgo, $lt: sevenDaysAgo },
+        status: "delivered"
+      }).lean();
 
-    // Customer Feedback
-    const vendorReviews = await Review.find({ vendorId: vendor._id }).sort({ createdAt: -1 }).limit(5)
-    const totalReviews = await Review.countDocuments({ vendorId: vendor._id })
-    const averageRatingResult = await Review.aggregate([
-      { $match: { vendorId: vendor._id } },
-      { $group: { _id: null, avgRating: { $avg: "$overall" } } },
-    ])
-    const averageRating =
-      averageRatingResult.length > 0 ? Number.parseFloat(averageRatingResult[0].avgRating.toFixed(1)) : 0
+      const lastWeekRevenue = lastWeekOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0;
 
-    res.json({
+      if (lastWeekRevenue > 0) {
+        growthPercentage = ((weeklyRevenue - lastWeekRevenue) / lastWeekRevenue) * 100;
+      } else if (weeklyRevenue > 0) {
+        growthPercentage = 100;
+      }
+    } catch (growthError) {
+      console.error("Growth calculation failed:", growthError);
+      growthPercentage = 0;
+    }
+
+    const response = {
       success: true,
       vendor: {
         id: vendor._id,
-        shopName: vendor.shopName,
-        shopDescription: vendor.shopDescription, // Added for VendorProfile
-        cuisine: vendor.cuisine, // Added for VendorProfile
-        address: vendor.address, // Added for VendorProfile
-        contact: vendor.contact, // Added for VendorProfile
-        operationalHours: vendor.operationalHours, // Added for VendorProfile
-        deliveryRadius: vendor.deliveryRadius, // Added for VendorProfile
-        minimumOrderValue: vendor.minimumOrderValue, // Added for VendorProfile
-        averagePreparationTime: vendor.averagePreparationTime, // Added for VendorProfile
-        images: vendor.images, // Added for VendorProfile
-        rating: vendor.rating,
-        totalOrders: vendor.totalOrders,
-        totalRevenue: vendor.totalRevenue,
-        isActive: vendor.isActive,
-        menu: vendor.menu, // Include the full menu here
+        shopName: vendor.shopName || "",
+        rating: vendor.rating || {},
+        stats: vendor.stats || {},
+        menu: vendor.menu || [] // ✅ include full menu here
       },
       todayStats: {
         orders: todayOrderCount,
         revenue: todayRevenue,
-        avgOrderValue: avgOrderValue, // Added
+        avgOrderValue,
+        cancelledOrders: todayOrders?.filter(o => o?.status === "cancelled").length || 0
       },
       weeklyStats: {
         revenue: weeklyRevenue,
         orders: weeklyOrderCount,
-        growth: weeklyGrowth,
+        growth: parseFloat(growthPercentage.toFixed(2))
       },
-      topDishes: topDishes,
       customerFeedback: {
-        averageRating: averageRating,
-        totalReviews: totalReviews,
-        recentReviews: vendorReviews.map((review) => ({
-          customer: review.customerId ? review.customerId.name : "Anonymous", // Populate customer name if needed
-          rating: review.overall,
-          comment: review.review,
-        })),
+        averageRating,
+        totalReviews: totalReviews || 0,
+        recentReviews: (vendorReviews || []).map(review => ({
+          customer: review?.customerId?.name || "Anonymous",
+          rating: review?.overall || 0,
+          comment: review?.review || ""
+        }))
       },
-      pendingOrders: pendingOrders.map((order) => ({
-        id: order._id,
-        orderId: order.orderId, // Ensure orderId is included
-        customerName: order.customerId ? order.customerId.name : "N/A", // Populate customer name
-        customerPhone: order.customerId ? order.customerId.phone : "N/A", // Populate customer phone
-        items: order.items,
-        total: order.pricing.total,
-        status: order.status,
-        orderTime: order.createdAt.toLocaleString(), // Format date
-        deliveryAddress: order.deliveryAddress,
-      })),
-    })
+      pendingOrders: (pendingOrders || []).map(order => ({
+        id: order?._id || "",
+        customerName: order?.customerId?.name || "N/A",
+        customerPhone: order?.customerId?.phone || "N/A",
+        items: (order?.items || []).map(item => ({
+          name: item?.name || "",
+          quantity: item?.quantity || 0,
+          price: item?.price || 0
+        })),
+        total: order?.pricing?.total || 0
+      }))
+    };
+
+    res.json(response);
+
   } catch (error) {
-    console.error("Vendor dashboard error:", error)
-    next(new ErrorHandler("Failed to fetch vendor dashboard data", 500))
+    console.error("Vendor dashboard error:", error);
+    next(new ErrorHandler("Failed to fetch vendor dashboard data", 500));
   }
-})
+});
 
 // UPDATE VENDOR PROFILE
 router.put(
@@ -264,85 +308,102 @@ router.put(
   ]),
   async (req, res, next) => {
     try {
-      if (req.user.role !== "vendor") {
-        return next(new ErrorHandler("Access denied. Only vendors can update their profile.", 403))
+      // 1. Verify user is a vendor
+      if (!req.user?.isVendor) {
+        return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403));
       }
-
-      const vendor = await Vendor.findOne({ userId: req.user.id })
+      // 2. PROPERLY GET THE VENDOR DOCUMENT (FIX)
+      const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId });
       if (!vendor) {
-        return next(new ErrorHandler("Vendor profile not found for this user.", 404))
+        return next(new ErrorHandler("Vendor profile not found", 404));
       }
 
-      const updateData = { ...req.body }
-
-      // Handle file uploads
-      if (req.files && req.files.shopImage && req.files.shopImage[0]) {
-        updateData["images.shop"] = req.files.shopImage[0].path
+      // 3. Handle file uploads
+      if (req.files?.shopImage?.[0]) {
+        vendor.images.shop = req.files.shopImage[0].path;
       }
-      if (req.files && req.files.licenseImage && req.files.licenseImage[0]) {
-        updateData["businessDetails.licenseImage"] = req.files.licenseImage[0].path
+      if (req.files?.licenseImage?.[0]) {
+        vendor.businessDetails.licenseImage = req.files.licenseImage[0].path;
       }
 
-      // Update top-level fields and nested fields
-      for (const key in updateData) {
-        if (key.includes(".")) {
-          // Handle nested fields (e.g., "address.street")
-          const [parent, child] = key.split(".")
-          if (vendor[parent] && typeof vendor[parent] === "object") {
-            vendor[parent][child] = updateData[key]
-          }
-        } else if (key === "cuisine") {
-          // Ensure cuisine is an array
-          vendor.cuisine =
-            typeof updateData.cuisine === "string"
-              ? updateData.cuisine.split(",").map((c) => c.trim())
-              : updateData.cuisine
-        } else if (key === "operationalHours") {
-          // Handle operationalHours as a nested object
-          if (typeof updateData.operationalHours === "string") {
-            try {
-              vendor.operationalHours = JSON.parse(updateData.operationalHours)
-            } catch (e) {
-              console.warn("Failed to parse operationalHours string:", e)
-              // Fallback or error handling if JSON parsing fails
-            }
-          } else {
-            vendor.operationalHours = updateData.operationalHours
-          }
-        } else {
-          // Update top-level fields
-          vendor[key] = updateData[key]
+      // 4. Process update data
+      const updateData = req.body;
+
+      // Handle special fields
+      if (updateData.cuisine) {
+        vendor.cuisine = typeof updateData.cuisine === 'string' 
+          ? updateData.cuisine.split(',').map(c => c.trim())
+          : updateData.cuisine;
+      }
+
+      if (updateData.operationalHours) {
+        try {
+          vendor.operationalHours = typeof updateData.operationalHours === 'string'
+            ? JSON.parse(updateData.operationalHours)
+            : updateData.operationalHours;
+        } catch (e) {
+          console.warn("Invalid operationalHours format:", e);
+          return next(new ErrorHandler("Invalid operational hours format", 400));
         }
       }
 
-      await vendor.save() // Use save() to trigger schema validation and pre-save hooks
+      // Handle other fields
+      for (const [key, value] of Object.entries(updateData)) {
+        if (value === undefined || value === null) continue;
+        
+        // Skip already processed fields
+        if (['cuisine', 'operationalHours'].includes(key)) continue;
+        
+        // Handle nested fields (e.g., "address.city")
+        if (key.includes('.')) {
+          const keys = key.split('.');
+          let target = vendor;
+          for (let i = 0; i < keys.length - 1; i++) {
+            if (!target[keys[i]]) target[keys[i]] = {};
+            target = target[keys[i]];
+          }
+          target[keys[keys.length - 1]] = value;
+        } 
+        // Regular fields
+        else {
+          vendor[key] = value;
+        }
+      }
 
+      // 5. Validate and save
+      const updatedVendor = await vendor.save();
+
+      // 6. Send response
       res.json({
         success: true,
         message: "Profile updated successfully",
-        vendor: vendor, // Send back the updated vendor object
-      })
+        vendor: updatedVendor,
+      });
+
     } catch (error) {
-      console.error("Update vendor profile error:", error)
+      console.error("Update vendor profile error:", error);
+      
       if (error.name === "ValidationError") {
-        const messages = Object.values(error.errors).map((val) => val.message)
-        return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
+        const messages = Object.values(error.errors).map(val => val.message);
+        return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400));
       }
-      next(new ErrorHandler("Failed to update profile", 500))
+      
+      next(new ErrorHandler(error.message || "Failed to update profile", 500));
     }
-  },
-)
+  }
+);
 
 // ADD MENU ITEM
 router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) => {
   try {
-    if (req.user.role !== "vendor") {
-      return next(new ErrorHandler("Access denied. Only vendors can add menu items.", 403))
+    // 1. Verify user is a vendor using the new isVendor flag
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403));
     }
 
-    const vendor = await Vendor.findOne({ userId: req.user.id })
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId });;
     if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found for this user.", 404))
+      return next(new ErrorHandler("Vendor profile not available", 404));
     }
 
     const { name, description, price, category, isVeg } = req.body
@@ -366,7 +427,8 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
     }
 
     vendor.menu.push(menuItem)
-    await vendor.save()
+    console.log("menu is add")
+    await vendor.save();
 
     res.status(201).json({
       success: true,
@@ -386,80 +448,114 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
 // UPDATE MENU ITEM
 router.put("/menu/:itemId", auth, upload.single("itemImage"), async (req, res, next) => {
   try {
-    if (req.user.role !== "vendor") {
-      return next(new ErrorHandler("Access denied. Only vendors can update menu items.", 403))
+    // 1. Verify user is a vendor using the new isVendor flag
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403));
     }
 
-    const vendor = await Vendor.findOne({ userId: req.user.id })
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId });
     if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found for this user.", 404))
+      return next(new ErrorHandler("Vendor profile not available", 404));
     }
 
-    const menuItem = vendor.menu.id(req.params.itemId)
+    const menuItem = vendor.menu.id(req.params.itemId);
     if (!menuItem) {
-      return next(new ErrorHandler("Menu item not found.", 404))
+      return next(new ErrorHandler("Menu item not found.", 404));
     }
 
-    // Update menu item fields
-    Object.assign(menuItem, req.body)
-    if (req.file) {
-      menuItem.image = req.file.path
-    }
-    if (req.body.price) {
-      menuItem.price = Number.parseFloat(req.body.price)
-      if (isNaN(menuItem.price)) {
-        return next(new ErrorHandler("Menu item price must be a valid number.", 400))
+    // Update basic fields
+    const fieldsToUpdate = ["name", "category", "description"];
+    fieldsToUpdate.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        menuItem[field] = req.body[field];
       }
+    });
+
+    // Parse and update price
+    if (req.body.price) {
+      const parsedPrice = parseFloat(req.body.price);
+      if (isNaN(parsedPrice)) {
+        return next(new ErrorHandler("Menu item price must be a valid number.", 400));
+      }
+      menuItem.price = parsedPrice;
     }
+
+    // Update boolean flags
     if (req.body.isVeg !== undefined) {
-      menuItem.isVeg = req.body.isVeg === "true" || req.body.isVeg === true
+      menuItem.isVeg = req.body.isVeg === "true" || req.body.isVeg === true;
     }
     if (req.body.isAvailable !== undefined) {
-      menuItem.isAvailable = req.body.isAvailable === "true" || req.body.isAvailable === true
+      menuItem.isAvailable = req.body.isAvailable === "true" || req.body.isAvailable === true;
     }
 
-    await vendor.save()
+    // Handle image
+    if (req.file) {
+      menuItem.image = req.file.path;
+    }
+
+    // Parse and assign customizations
+    if (req.body.customizations) {
+      try {
+        const parsedCustomizations = JSON.parse(req.body.customizations);
+        if (!Array.isArray(parsedCustomizations)) {
+          return next(new ErrorHandler("Customizations must be an array.", 400));
+        }
+        menuItem.customizations = parsedCustomizations;
+      } catch (err) {
+        return next(new ErrorHandler("Invalid JSON format for customizations.", 400));
+      }
+    }
+
+    await vendor.save();
 
     res.json({
       success: true,
       message: "Menu item updated successfully",
       menuItem,
-    })
+    });
   } catch (error) {
-    console.error("Update menu item error:", error)
+    console.error("Update menu item error:", error);
     if (error.name === "CastError") {
-      return next(new ErrorHandler("Invalid Menu Item ID format.", 400))
+      return next(new ErrorHandler("Invalid Menu Item ID format.", 400));
     }
     if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((val) => val.message)
-      return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
+      const messages = Object.values(error.errors).map((val) => val.message);
+      return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400));
     }
-    next(new ErrorHandler("Failed to update menu item", 500))
+    next(new ErrorHandler("Failed to update menu item", 500));
   }
-})
+});
+
 
 // DELETE MENU ITEM
 router.delete("/menu/:itemId", auth, async (req, res, next) => {
-  try {
-    if (req.user.role !== "vendor") {
-      return next(new ErrorHandler("Access denied. Only vendors can delete menu items.", 403))
-    }
+ try {
+  // 1. Ensure user is a vendor
+  if (!req.user?.isVendor) {
+    return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403));
+  }
 
-    const vendor = await Vendor.findOne({ userId: req.user.id })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found for this user.", 404))
-    }
+  // 2. Find the vendor profile
+  const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId });
+  if (!vendor) {
+    return next(new ErrorHandler("Vendor profile not available", 404));
+  }
 
-    const menuItem = vendor.menu.id(req.params.itemId)
-    if (!menuItem) {
-      return next(new ErrorHandler("Menu item not found.", 404))
-    }
+  // 3. Get itemId from params
+  const itemId = req.params.itemId;
 
-    menuItem.remove() // Mongoose subdocument remove method
-    await vendor.save()
+  // 4. Check if menu item exists using subdocument id()
+  const menuItemExists = vendor.menu.id(itemId);
+  if (!menuItemExists) {
+    return res.status(404).json({ success: false, message: "Menu item not found" });
+  }
 
-    res.json({ success: true, message: "Menu item deleted successfully" })
-  } catch (error) {
+  // 5. Remove the subdocument using .pull() and save vendor
+  vendor.menu.pull({ _id: itemId });
+  await vendor.save();
+
+  return res.status(200).json({ success: true, message: "Menu item deleted successfully" });
+}  catch (error) {
     console.error("Delete menu item error:", error)
     if (error.name === "CastError") {
       return next(new ErrorHandler("Invalid Menu Item ID format.", 400))
@@ -475,7 +571,7 @@ router.put("/toggle-status", auth, async (req, res, next) => {
       return next(new ErrorHandler("Access denied. Only vendors can toggle their status.", 403))
     }
 
-    const vendor = await Vendor.findOne({ userId: req.user.id })
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
     if (!vendor) {
       return next(new ErrorHandler("Vendor profile not found for this user.", 404))
     }

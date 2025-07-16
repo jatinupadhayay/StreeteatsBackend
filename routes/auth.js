@@ -333,6 +333,7 @@ router.post("/login", async (req, res) => {
           status: vendor?.status || "not found",
         })
       }
+       
     }
 
     if (role === "delivery") {

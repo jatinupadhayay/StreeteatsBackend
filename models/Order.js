@@ -78,6 +78,13 @@ const orderSchema = new mongoose.Schema(
       total: { type: Number, required: true },
       roundOff: { type: Number, default: 0 },
     },
+// Order Type
+  orderType: {
+  type: String,
+  enum: ["delivery", "pickup", "dine_in"],
+  required: true,
+  default: "delivery"
+  },
 
     // Delivery Information
     deliveryAddress: {
@@ -100,6 +107,7 @@ const orderSchema = new mongoose.Schema(
       instructions: String,
     },
 
+
     // Order Status & Timeline
     status: {
       type: String,
@@ -109,6 +117,7 @@ const orderSchema = new mongoose.Schema(
         "accepted",
         "preparing",
         "ready",
+        "ready_for_pickup",
         "picked_up",
         "out_for_delivery",
         "delivered",
@@ -133,7 +142,7 @@ const orderSchema = new mongoose.Schema(
     paymentDetails: {
       method: {
         type: String,
-        enum: ["cod", "online", "wallet", "upi", "card"],
+        enum: ["cod", "online", "pickup_pay", "upi", "card","pending"],
         required: true,
       },
       provider: String, // razorpay, stripe, paytm

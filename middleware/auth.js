@@ -1,28 +1,43 @@
-const jwt = require("jsonwebtoken")
-const User = require("../models/User")
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const Vendor = require("../models/Vendor");
 
 const auth = async (req, res, next) => {
   try {
-    const token = req.header("Authorization")?.replace("Bearer ", "")
+    const token = req.header("Authorization")?.replace("Bearer ", "");
 
-    if (!token) {
-      return res.status(401).json({ message: "No token, authorization denied" })
+    if (!token) throw new Error("No token provided");
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Check both User and Vendor collections
+    const [user, vendor] = await Promise.all([
+      User.findById(decoded.userId).lean(),
+      Vendor.findOne({ userId: decoded.userId }).lean()
+    ]);
+
+    if (!user && !vendor) {
+      throw new Error("No user or vendor found");
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
-    const user = await User.findById(decoded.userId).select("-password")
+    // Attach to request object
+    req.user = {
+      ...decoded,
+      isVendor: !!vendor,  // Explicit vendor flag
+      role: vendor ? "vendor" : user?.role
+    };
 
-    if (!user) {
-      return res.status(401).json({ message: "Token is not valid" })
-    }
+    if (user) req.userDetails = user;
+    if (vendor) req.vendorDetails = vendor;
 
-    req.user = decoded
-    req.userDetails = user
-    next()
+    next();
   } catch (error) {
-    console.error("Auth middleware error:", error)
-    res.status(401).json({ message: "Token is not valid" })
+    console.error("Auth error:", error.message);
+    res.status(401).json({ 
+      message: "Authentication failed",
+      error: error.message 
+    });
   }
-}
+};
 
-module.exports = auth
+module.exports = auth;
