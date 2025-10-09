@@ -2,6 +2,7 @@ const express = require("express")
 const cloudinary = require("cloudinary").v2
 const upload = require("../middleware/upload")
 const auth = require("../middleware/auth")
+const fs = require("fs") // Add this to delete local files after upload
 
 const router = express.Router()
 
@@ -25,13 +26,20 @@ router.post("/single", auth, upload.single("file"), async (req, res) => {
       resource_type: "auto",
     })
 
+    // Delete local file after Cloudinary upload
+    fs.unlinkSync(req.file.path)
+
     res.json({
       message: "File uploaded successfully",
-      url: result.secure_url,
+      url: result.secure_url, // Cloudinary URL
       publicId: result.public_id,
     })
   } catch (error) {
     console.error("Upload error:", error)
+    // Clean up local file on error
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path)
+    }
     res.status(500).json({ message: "File upload failed", error: error.message })
   }
 })
@@ -47,20 +55,35 @@ router.post("/multiple", auth, upload.array("files", 5), async (req, res) => {
       cloudinary.uploader.upload(file.path, {
         folder: "street-eats",
         resource_type: "auto",
-      }),
+      })
     )
 
     const results = await Promise.all(uploadPromises)
 
+    // Delete local files after Cloudinary upload
+    req.files.forEach(file => {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path)
+      }
+    })
+
     res.json({
       message: "Files uploaded successfully",
       files: results.map((result) => ({
-        url: result.secure_url,
+        url: result.secure_url, // Cloudinary URLs
         publicId: result.public_id,
       })),
     })
   } catch (error) {
     console.error("Multiple upload error:", error)
+    // Clean up local files on error
+    if (req.files) {
+      req.files.forEach(file => {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path)
+        }
+      })
+    }
     res.status(500).json({ message: "File upload failed", error: error.message })
   }
 })

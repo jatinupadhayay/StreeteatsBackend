@@ -4,7 +4,9 @@ const cors = require("cors")
 const helmet = require("helmet")
 const rateLimit = require("express-rate-limit")
 const http = require("http")
+const path = require("path")
 const socketIo = require("socket.io")
+
 require("dotenv").config()
 
 // ✅ Import models
@@ -12,6 +14,7 @@ const VendorModel = require("./models/Vendor") // make sure the path is correct
 
 const app = express()
 const server = http.createServer(app)
+
 
 // ✅ Initialize Socket.IO
 const io = socketIo(server, {
@@ -55,8 +58,11 @@ app.use(
 app.options("*", cors())
 
 // ✅ Body parsing
-app.use(express.json({ limit: "10mb" }))
-app.use(express.urlencoded({ extended: true, limit: "10mb" }))
+app.use(express.json({ limit: "10mb" })) // To parse JSON request bodies
+app.use(express.urlencoded({ extended: true, limit: "10mb" })) // To parse URL-encoded request bodies (for form data)
+
+// Serve static files from the 'uploads' directory
+app.use("/uploads", express.static(path.join(__dirname, "uploads")))
 
 // ✅ Rate limiting
 app.use(
