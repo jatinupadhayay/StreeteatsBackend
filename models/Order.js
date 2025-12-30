@@ -142,7 +142,7 @@ const orderSchema = new mongoose.Schema(
     paymentDetails: {
       method: {
         type: String,
-        enum: ["cod", "online", "pickup_pay", "upi", "card","pending"],
+        enum: ["cod", "online", "pickup_pay", "upi", "card", "pending"],
         required: true,
       },
       provider: String, // razorpay, stripe, paytm
@@ -152,7 +152,7 @@ const orderSchema = new mongoose.Schema(
       signature: String,
       status: {
         type: String,
-        enum: ["pending", "processing", "completed", "failed", "refunded", "partially_refunded"],
+        enum: ["pending", "processing", "completed", "failed", "refunded", "partially_refunded", "pending_verification"],
         default: "pending",
       },
       paidAmount: Number,
@@ -160,6 +160,12 @@ const orderSchema = new mongoose.Schema(
       refundReason: String,
       paymentTimestamp: Date,
       refundTimestamp: Date,
+    },
+
+    paidToVendorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vendor",
+      default: null,
     },
 
     // Time Management

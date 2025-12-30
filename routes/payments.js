@@ -242,4 +242,57 @@ async function handleRefundProcessed(refund) {
   }
 }
 
+// CONFIRM UPI PAYMENT (CUSTOMER CONFIRMATION)
+router.post("/confirm-upi-payment", auth, async (req, res) => {
+  try {
+    const { orderId, userConfirmed } = req.body
+
+    const order = await Order.findById(orderId)
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found." })
+    }
+
+    if (order.customerId.toString() !== req.user.userId) {
+      return res.status(403).json({ success: false, message: "Access denied." })
+    }
+
+    if (userConfirmed) {
+      order.paymentDetails.status = "pending_verification"
+      // Optionally, update order status to 'payment_pending' or similar
+      order.status = "placed" // Keep as placed, vendor will confirm payment then accept
+
+      // Notify the vendor about a potentially paid UPI order
+      const io = req.app.get("io")
+      if (io) {
+        io.to(`vendor-${order.vendorId}`).emit("upi-payment-pending-verification", {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          amount: order.pricing.total,
+          customerName: req.user.name, // Assuming req.user has name
+        })
+      }
+    } else {
+      // User explicitly stated payment failed or cancelled
+      order.paymentDetails.status = "failed"
+      order.status = "cancelled" // Mark order as cancelled if payment failed
+      // Optionally, notify vendor of failed payment/cancelled order
+      const io = req.app.get("io")
+      if (io) {
+        io.to(`vendor-${order.vendorId}`).emit("upi-payment-failed", {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          amount: order.pricing.total,
+          customerName: req.user.name, // Assuming req.user has name
+        })
+      }
+    }
+    await order.save()
+
+    res.json({ success: true, message: "Payment status updated successfully." })
+  } catch (error) {
+    console.error("Confirm UPI payment error:", error)
+    res.status(500).json({ success: false, message: "Failed to confirm UPI payment.", error: error.message })
+  }
+})
+
 module.exports = router

@@ -269,7 +269,10 @@ const vendorSchema = new mongoose.Schema(
       popularItems: [String],
       peakHours: [String],
       topCustomers: [mongoose.Schema.Types.ObjectId],
+      likes: { type: Number, default: 0 },
+      shares: { type: Number, default: 0 },
     },
+    likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
     // Compliance & Certifications
     certifications: [
@@ -288,6 +291,11 @@ const vendorSchema = new mongoose.Schema(
       promotions: { type: Boolean, default: true },
       reviews: { type: Boolean, default: true },
     },
+
+    // UPI Payment Settings
+    upiId: { type: String, trim: true, default: null },
+    upiName: { type: String, trim: true, default: null },
+    upiEnabled: { type: Boolean, default: false },
   },
   {
     timestamps: true,

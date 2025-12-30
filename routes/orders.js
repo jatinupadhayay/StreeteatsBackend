@@ -84,8 +84,9 @@ router.post("/", auth, async (req, res) => {
       status,
       paymentDetails: {
         method: paymentMethod,
-        status: paymentMethod === "cod" ? "pending" : "completed"
+        status: paymentMethod === "cod" || paymentMethod === "upi" ? "pending" : "completed",
       },
+      ...(paymentMethod === "upi" && { paidToVendorId: vendorId }),
       specialInstructions,
       estimatedDeliveryTime
     })

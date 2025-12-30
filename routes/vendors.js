@@ -385,6 +385,14 @@ router.get("/:id", async (req, res, next) => {
         isActive: vendor.isActive,
         menu: vendor.menu.filter((item) => item.isAvailable),
         totalOrders: vendor.totalOrders,
+        // Include UPI payment info if enabled (for customer checkout)
+        upiPayment: vendor.upiEnabled ? {
+          enabled: true,
+          upiId: vendor.upiId,
+          upiName: vendor.upiName,
+        } : {
+          enabled: false,
+        },
       },
     })
   } catch (error) {
@@ -905,6 +913,158 @@ router.put("/toggle-status", auth, async (req, res, next) => {
   } catch (error) {
     console.error("Toggle vendor status error:", error)
     next(new ErrorHandler("Failed to toggle vendor status", 500))
+  }
+})
+
+// GET VENDOR PAYMENT SETTINGS
+router.get("/payment-settings", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can view payment settings.", 403))
+    }
+
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found.", 404))
+    }
+
+    res.json({
+      success: true,
+      settings: {
+        upiId: vendor.upiId,
+        upiName: vendor.upiName,
+        upiEnabled: vendor.upiEnabled,
+      },
+    })
+  } catch (error) {
+    console.error("Get vendor payment settings error:", error)
+    next(new ErrorHandler("Failed to fetch vendor payment settings", 500))
+  }
+})
+
+// UPDATE VENDOR PAYMENT SETTINGS
+router.post("/payment-settings", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can update payment settings.", 403))
+    }
+
+    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found.", 404))
+    }
+
+    const { upiId, upiName, upiEnabled } = req.body
+
+    // Basic validation
+    if (upiEnabled && (!upiId || !upiName)) {
+      return next(new ErrorHandler("UPI ID and Account Holder Name are required if UPI payments are enabled.", 400))
+    }
+    const upiRegex = /^[a-zA-Z0-9.\-]+@[a-zA-Z0-9.\-]+$/
+    if (upiEnabled && upiId && !upiRegex.test(upiId)) {
+        return next(new ErrorHandler("Invalid UPI ID format.", 400))
+    }
+
+    vendor.upiId = upiId || null
+    vendor.upiName = upiName || null
+    vendor.upiEnabled = upiEnabled // Ensure boolean
+
+    await vendor.save()
+
+    res.json({
+      success: true,
+      message: "UPI payment settings updated successfully",
+      settings: {
+        upiId: vendor.upiId,
+        upiName: vendor.upiName,
+        upiEnabled: vendor.upiEnabled,
+      },
+    })
+  } catch (error) {
+    console.error("Update vendor payment settings error:", error)
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map(val => val.message)
+      return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
+    }
+    next(new ErrorHandler(error.message || "Failed to update UPI payment settings", 500))
+  }
+})
+
+// LIKE/UNLIKE VENDOR
+router.post("/:id/like", auth, async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id)
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor not found.", 404))
+    }
+
+    const userId = req.user.userId
+    const isLiked = vendor.likedBy?.some(id => id.toString() === userId.toString())
+
+    if (isLiked) {
+      // Unlike
+      vendor.likedBy = vendor.likedBy.filter(id => id.toString() !== userId.toString())
+      vendor.analytics.likes = Math.max(0, (vendor.analytics.likes || 0) - 1)
+    } else {
+      // Like
+      if (!vendor.likedBy) vendor.likedBy = []
+      vendor.likedBy.push(userId)
+      vendor.analytics.likes = (vendor.analytics.likes || 0) + 1
+    }
+
+    await vendor.save()
+
+    res.json({
+      success: true,
+      isLiked: !isLiked,
+      likesCount: vendor.analytics.likes,
+    })
+  } catch (error) {
+    console.error("Like vendor error:", error)
+    next(new ErrorHandler("Failed to like/unlike vendor", 500))
+  }
+})
+
+// SHARE VENDOR (increment share count)
+router.post("/:id/share", async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id)
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor not found.", 404))
+    }
+
+    vendor.analytics.shares = (vendor.analytics.shares || 0) + 1
+    await vendor.save()
+
+    res.json({
+      success: true,
+      sharesCount: vendor.analytics.shares,
+    })
+  } catch (error) {
+    console.error("Share vendor error:", error)
+    next(new ErrorHandler("Failed to record share", 500))
+  }
+})
+
+// CHECK IF USER LIKED VENDOR
+router.get("/:id/like-status", auth, async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id)
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor not found.", 404))
+    }
+
+    const userId = req.user.userId
+    const isLiked = vendor.likedBy?.some(id => id.toString() === userId.toString()) || false
+
+    res.json({
+      success: true,
+      isLiked,
+      likesCount: vendor.analytics.likes || 0,
+    })
+  } catch (error) {
+    console.error("Get like status error:", error)
+    next(new ErrorHandler("Failed to get like status", 500))
   }
 })
 
