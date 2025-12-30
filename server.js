@@ -176,6 +176,9 @@ try {
   app.use("/api/orders", require("./routes/orders"))
   app.use("/api/delivery", require("./routes/delivery"))
   app.use("/api/payments", require("./routes/payments"))
+  app.use("/api/search", require("./routes/search"))
+  app.use("/api/rewards", require("./routes/rewards"))
+  app.use("/api/gifts", require("./routes/gifts"))
   app.use("/api/upload", require("./routes/upload"))
 } catch (err) {
   console.error("❌ Failed to load routes:", err.message)

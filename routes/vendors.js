@@ -10,6 +10,9 @@ const fs = require("fs")
 
 const router = express.Router()
 
+const DEFAULT_TRENDING_LIMIT = 15
+const DEFAULT_TRENDING_WINDOW_DAYS = 14
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -29,6 +32,13 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c
 }
 
+function formatDistance(distance) {
+  if (distance == null || Number.isNaN(distance)) {
+    return null
+  }
+  return Number(distance.toFixed(2))
+}
+
 // GET ALL VENDORS (For customers)
 router.get("/", async (req, res, next) => {
   try {
@@ -46,27 +56,44 @@ router.get("/", async (req, res, next) => {
       ]
     }
 
-    let vendors = await Vendor.find(query).populate("userId", "name email phone")
+    const vendorsRaw = await Vendor.find(query).populate("userId", "name email phone").lean()
 
-    if (lat && lng) {
-      const userLat = Number.parseFloat(lng)
-      const userLng = Number.parseFloat(lat)
-      const searchRadius = Number.parseFloat(radius)
+    const vendorDistanceMap = new Map()
+    let vendors = vendorsRaw
 
-      if (isNaN(userLat) || isNaN(userLng) || isNaN(searchRadius)) {
+    const hasLocation = lat !== undefined && lng !== undefined && lat !== "" && lng !== ""
+
+    if (hasLocation) {
+      const userLat = Number.parseFloat(lat)
+      const userLng = Number.parseFloat(lng)
+      const searchRadius = Number.parseFloat(radius ?? "10")
+
+      if (Number.isNaN(userLat) || Number.isNaN(userLng) || Number.isNaN(searchRadius)) {
         return next(new ErrorHandler("Invalid latitude, longitude, or radius provided.", 400))
       }
 
-      vendors = vendors.filter((vendor) => {
+      const filteredVendors = []
+
+      vendorsRaw.forEach((vendor) => {
         if (!vendor.address || !vendor.address.coordinates || vendor.address.coordinates.length < 2) {
           console.warn(`Vendor ${vendor._id} missing valid coordinates. Skipping distance calculation.`)
-          return false
+          vendorDistanceMap.set(String(vendor._id), null)
+          return
         }
-        const vendorLng = vendor.address.coordinates[0]
-        const vendorLat = vendor.address.coordinates[1]
 
-        const distance = calculateDistance(userLat, userLng, vendorLat, vendorLng)
-        return distance <= searchRadius
+        const [vendorLng, vendorLat] = vendor.address.coordinates
+        const distanceKm = calculateDistance(userLat, userLng, vendorLat, vendorLng)
+        vendorDistanceMap.set(String(vendor._id), distanceKm)
+
+        if (distanceKm <= searchRadius) {
+          filteredVendors.push(vendor)
+        }
+      })
+
+      vendors = filteredVendors
+    } else {
+      vendorsRaw.forEach((vendor) => {
+        vendorDistanceMap.set(String(vendor._id), null)
       })
     }
 
@@ -82,6 +109,7 @@ router.get("/", async (req, res, next) => {
         rating: vendor.rating,
         deliveryRadius: vendor.deliveryRadius,
         operationalHours: vendor.operationalHours,
+        distanceKm: formatDistance(vendorDistanceMap.get(String(vendor._id))),
         images: {
           shop: vendor.images?.shop || null,
           gallery: vendor.images?.gallery || [],
@@ -93,6 +121,240 @@ router.get("/", async (req, res, next) => {
   } catch (error) {
     console.error("Get vendors error:", error)
     next(new ErrorHandler("Failed to fetch vendors", 500))
+  }
+})
+
+router.get("/trending/dishes", async (req, res, next) => {
+  try {
+    const { lat, lng, radius, limit, days } = req.query
+
+    const limitNum = Math.min(Number.parseInt(limit, 10) || DEFAULT_TRENDING_LIMIT, 50)
+    const windowDaysRaw = Number.parseInt(days, 10)
+    const windowDays = Math.min(Math.max(windowDaysRaw || DEFAULT_TRENDING_WINDOW_DAYS, 1), 90)
+    const radiusKm = (() => {
+      const parsed = Number.parseFloat(radius ?? "5")
+      return Number.isNaN(parsed) ? 5 : parsed
+    })()
+
+    const vendorsRaw = await Vendor.find({ status: "approved", isActive: true }).lean()
+    if (vendorsRaw.length === 0) {
+      return res.json({
+        success: true,
+        dishes: [],
+        metadata: {
+          total: 0,
+          limit: limitNum,
+          radiusKm,
+          hasLocation: false,
+          fallbackUsed: true,
+          windowDays,
+        },
+      })
+    }
+
+    const vendorMap = new Map()
+    vendorsRaw.forEach((vendor) => {
+      vendorMap.set(String(vendor._id), { vendor, distanceKm: null })
+    })
+
+    let hasLocation = false
+    let userLat
+    let userLng
+    if (lat !== undefined && lng !== undefined && lat !== "" && lng !== "") {
+      const parsedLat = Number.parseFloat(lat)
+      const parsedLng = Number.parseFloat(lng)
+      if (Number.isNaN(parsedLat) || Number.isNaN(parsedLng)) {
+        return next(new ErrorHandler("Invalid latitude or longitude provided.", 400))
+      }
+      userLat = parsedLat
+      userLng = parsedLng
+      hasLocation = true
+    }
+
+    let filteredVendors = vendorsRaw
+    let fallbackUsed = false
+
+    if (hasLocation) {
+      const withinRadius = []
+
+      vendorsRaw.forEach((vendor) => {
+        const coords = vendor.address?.coordinates
+        let distanceKm = null
+        if (Array.isArray(coords) && coords.length >= 2) {
+          const [vendorLng, vendorLat] = coords
+          distanceKm = calculateDistance(userLat, userLng, vendorLat, vendorLng)
+        } else {
+          console.warn(`Vendor ${vendor._id} missing coordinates for trending distance calculation.`)
+        }
+
+        vendorMap.set(String(vendor._id), { vendor, distanceKm })
+
+        if (distanceKm != null && distanceKm <= radiusKm) {
+          withinRadius.push(vendor)
+        }
+      })
+
+      filteredVendors = withinRadius
+      if (filteredVendors.length === 0) {
+        filteredVendors = vendorsRaw
+        fallbackUsed = true
+      }
+    }
+
+    if (filteredVendors.length === 0) {
+      return res.json({
+        success: true,
+        dishes: [],
+        metadata: {
+          total: 0,
+          limit: limitNum,
+          radiusKm,
+          hasLocation,
+          fallbackUsed: fallbackUsed || !hasLocation,
+          windowDays,
+        },
+      })
+    }
+
+    const vendorIds = filteredVendors.map((vendor) => vendor._id)
+    const matchStage = {
+      vendorId: { $in: vendorIds },
+      status: { $nin: ["cancelled"] },
+    }
+
+    if (windowDays > 0) {
+      matchStage.createdAt = {
+        $gte: new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000),
+      }
+    }
+
+    const aggregation = await Order.aggregate([
+      { $match: matchStage },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id: {
+            vendorId: "$vendorId",
+            menuItemId: "$items.menuItemId",
+          },
+          totalOrders: { $sum: "$items.quantity" },
+          lastOrderedAt: { $max: "$updatedAt" },
+          lastCreatedAt: { $max: "$createdAt" },
+        },
+      },
+      { $sort: { totalOrders: -1, lastOrderedAt: -1 } },
+      { $limit: limitNum * 3 },
+    ])
+
+    const dishes = []
+    const seenDishIds = new Set()
+
+    aggregation.forEach((entry) => {
+      const vendorId = entry._id.vendorId.toString()
+      const menuItemId = entry._id.menuItemId
+      const vendorEntry = vendorMap.get(vendorId)
+      if (!vendorEntry) {
+        return
+      }
+
+      const vendor = vendorEntry.vendor
+      const menuItem = (vendor.menu || []).find((item) => String(item._id) === menuItemId)
+      if (!menuItem || menuItem.isAvailable === false) {
+        return
+      }
+
+      if (seenDishIds.has(menuItemId)) {
+        return
+      }
+
+      seenDishIds.add(menuItemId)
+      dishes.push({
+        id: menuItemId,
+        name: menuItem.name,
+        description: menuItem.description,
+        price: menuItem.price,
+        image: menuItem.image,
+        category: menuItem.category,
+        totalOrders: entry.totalOrders,
+        lastOrderedAt: entry.lastOrderedAt || entry.lastCreatedAt || null,
+        vendor: {
+          id: vendor._id,
+          shopName: vendor.shopName,
+          rating: vendor.rating,
+          distanceKm: formatDistance(vendorEntry.distanceKm),
+          address: vendor.address,
+          images: vendor.images,
+        },
+      })
+    })
+
+    if (dishes.length < limitNum) {
+      fallbackUsed = true
+
+      for (const vendor of filteredVendors) {
+        const vendorEntry = vendorMap.get(String(vendor._id)) || { distanceKm: null }
+
+        const recommendedMenu = (vendor.menu || [])
+          .filter((item) => item && item.isAvailable !== false)
+          .sort((a, b) => {
+            const scoreA = (a.isFeatured ? 2 : 0) + (a.isPopular ? 1 : 0)
+            const scoreB = (b.isFeatured ? 2 : 0) + (b.isPopular ? 1 : 0)
+            return scoreB - scoreA
+          })
+          .slice(0, 3)
+
+        for (const item of recommendedMenu) {
+          const dishId = String(item._id)
+          if (seenDishIds.has(dishId)) {
+            continue
+          }
+
+          seenDishIds.add(dishId)
+          dishes.push({
+            id: dishId,
+            name: item.name,
+            description: item.description,
+            price: item.price,
+            image: item.image,
+            category: item.category,
+            totalOrders: 0,
+            lastOrderedAt: null,
+            vendor: {
+              id: vendor._id,
+              shopName: vendor.shopName,
+              rating: vendor.rating,
+              distanceKm: formatDistance(vendorEntry.distanceKm),
+              address: vendor.address,
+              images: vendor.images,
+            },
+          })
+
+          if (dishes.length >= limitNum) {
+            break
+          }
+        }
+
+        if (dishes.length >= limitNum) {
+          break
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      dishes: dishes.slice(0, limitNum),
+      metadata: {
+        total: Math.min(dishes.length, limitNum),
+        limit: limitNum,
+        radiusKm,
+        hasLocation,
+        fallbackUsed,
+        windowDays,
+      },
+    })
+  } catch (error) {
+    console.error("Trending dishes error:", error)
+    next(new ErrorHandler("Failed to fetch trending dishes", 500))
   }
 })
 
@@ -130,7 +392,7 @@ router.get("/:id", async (req, res, next) => {
     if (error.name === "CastError") {
       return next(new ErrorHandler("Invalid Vendor ID format.", 400))
     }
-    next(new ErrorHandler("Failed to fetch vendor", 500))
+    next(new ErrorHandler("Failed to  a fetch vendor", 500))
   }
 })
 
