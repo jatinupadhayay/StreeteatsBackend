@@ -172,6 +172,7 @@ app.get("/api/health", (req, res) => {
 // ✅ Routes
 try {
   app.use("/api/auth", require("./routes/auth"))
+  app.use("/api/customer", require("./routes/customer"))
   app.use("/api/vendors", require("./routes/vendors"))
   app.use("/api/orders", require("./routes/orders"))
   app.use("/api/delivery", require("./routes/delivery"))
@@ -195,9 +196,14 @@ app.all("/api/*", (req, res) => {
 
 // ✅ Global error handler
 app.use((err, req, res, next) => {
-  console.error("🔥 Server error:", err.stack)
-  res.status(500).json({
-    message: "Something went wrong",
+  const statusCode = err.statusCode || 500
+  const message = err.message || "Something went wrong"
+
+  console.error(`🔥 Error [${statusCode}]:`, err.stack)
+
+  res.status(statusCode).json({
+    success: false,
+    message: message,
     error: process.env.NODE_ENV === "development" ? err.message : "Internal server error",
   })
 })

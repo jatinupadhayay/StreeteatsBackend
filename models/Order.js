@@ -78,13 +78,13 @@ const orderSchema = new mongoose.Schema(
       total: { type: Number, required: true },
       roundOff: { type: Number, default: 0 },
     },
-// Order Type
-  orderType: {
-  type: String,
-  enum: ["delivery", "pickup", "dine_in"],
-  required: true,
-  default: "delivery"
-  },
+    // Order Type
+    orderType: {
+      type: String,
+      enum: ["delivery", "pickup", "dine_in"],
+      required: true,
+      default: "delivery"
+    },
 
     // Delivery Information
     deliveryAddress: {
@@ -358,6 +358,7 @@ orderSchema.pre("save", function (next) {
       status: this.status,
       timestamp: new Date(),
       updatedBy: this.updatedBy || null,
+      notes: this._statusNotes || null
     })
   }
 

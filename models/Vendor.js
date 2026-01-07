@@ -3,7 +3,7 @@ const mongoose = require("mongoose")
 const vendorSchema = new mongoose.Schema(
   {
     // User Reference
-     userId: {
+    userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -91,6 +91,8 @@ const vendorSchema = new mongoose.Schema(
       ifscCode: { type: String, required: true },
       accountHolderName: String,
       upiId: String,
+      upiName: String,
+      upiEnabled: { type: Boolean, default: false },
     },
 
     // Operational Details

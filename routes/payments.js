@@ -3,6 +3,7 @@ const Razorpay = require("razorpay")
 const crypto = require("crypto")
 const Order = require("../models/Order")
 const auth = require("../middleware/auth")
+const { sendOrderConfirmationEmail } = require("../utils/emailService")
 
 const router = express.Router()
 
@@ -287,6 +288,16 @@ router.post("/confirm-upi-payment", auth, async (req, res) => {
       }
     }
     await order.save()
+
+    // Send confirmation email if user confirmed payment
+    if (userConfirmed) {
+      try {
+        await sendOrderConfirmationEmail(req.userDetails.email, order)
+        console.log("UPI Order confirmation email sent")
+      } catch (emailError) {
+        console.log("Email sending failed:", emailError.message)
+      }
+    }
 
     res.json({ success: true, message: "Payment status updated successfully." })
   } catch (error) {

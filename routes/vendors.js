@@ -1,4 +1,5 @@
 const express = require("express")
+const mongoose = require("mongoose")
 const Vendor = require("../models/Vendor")
 const Order = require("../models/Order")
 const Review = require("../models/Review")
@@ -46,7 +47,7 @@ router.get("/", async (req, res, next) => {
 
     const query = { status: "approved", isActive: true }
 
-   
+
 
     if (search) {
       query.$or = [
@@ -358,6 +359,78 @@ router.get("/trending/dishes", async (req, res, next) => {
   }
 })
 
+
+// GET PAYMENT SETTINGS
+router.get("/payment-settings", auth, async (req, res, next) => {
+  try {
+    // req.vendorDetails is populated by auth middleware if user is a vendor
+    if (!req.user?.isVendor || !req.vendorDetails) {
+      return next(new ErrorHandler("Access denied. Only vendors can access payment settings.", 403))
+    }
+
+    res.status(200).json({
+      success: true,
+      settings: {
+        upiId: req.vendorDetails.businessDetails?.upiId || "",
+        upiName: req.vendorDetails.businessDetails?.upiName || "",
+        upiEnabled: req.vendorDetails.businessDetails?.upiEnabled || false,
+      },
+    })
+  } catch (error) {
+    console.error("Get payment settings error:", error)
+    next(new ErrorHandler(error.message || "Failed to fetch payment settings", 500))
+  }
+})
+
+// UPDATE PAYMENT SETTINGS
+router.put("/payment-settings", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can update payment settings.", 403))
+    }
+
+    const { upiId, upiName, upiEnabled } = req.body
+
+    // We need the full Mongoose document to call .save(), req.vendorDetails might be lean
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found", 404))
+    }
+
+    // Initialize businessDetails if missing
+    if (!vendor.businessDetails) {
+      vendor.businessDetails = {
+        licenseNumber: "NA", // Temporary placeholder if missing entirely
+        bankAccount: "NA",
+        ifscCode: "NA"
+      }
+    }
+
+    // Update individual fields to prevent overwriting other business details
+    vendor.businessDetails.upiId = upiId || ""
+    vendor.businessDetails.upiName = upiName || ""
+    vendor.businessDetails.upiEnabled = upiEnabled || false
+
+    // Explicitly mark as modified if needed, though usually automatic for objects
+    vendor.markModified('businessDetails')
+
+    await vendor.save()
+
+    res.status(200).json({
+      success: true,
+      message: "Payment settings updated successfully",
+      settings: {
+        upiId: vendor.businessDetails.upiId,
+        upiName: vendor.businessDetails.upiName,
+        upiEnabled: vendor.businessDetails.upiEnabled,
+      },
+    })
+  } catch (error) {
+    console.error("Update payment settings error:", error.message)
+    next(new ErrorHandler(error.message || "Failed to update payment settings", 500))
+  }
+})
+
 router.get("/:id", async (req, res, next) => {
   try {
     const vendor = await Vendor.findById(req.params.id).populate("userId", "name email phone")
@@ -432,38 +505,38 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
             createdAt: { $gte: today, $lt: tomorrow },
             status: { $ne: "cancelled" }
           }).lean(),
-          
+
           Order.find({
             vendorId: vendor._id,
             status: { $in: ["placed", "accepted", "preparing"] }
           }).populate("customerId", "name phone email").lean(),
-          
+
           Order.find({
             vendorId: vendor._id,
             createdAt: { $gte: sevenDaysAgo },
             status: "delivered"
           }).lean(),
-          
+
           Review.find({ vendorId: vendor._id })
             .sort({ createdAt: -1 })
             .limit(5)
             .populate("customerId", "name")
             .lean(),
-          
+
           Review.countDocuments({ vendorId: vendor._id }),
-          
+
           Review.aggregate([
             { $match: { vendorId: vendor._id } },
             { $group: { _id: null, avgRating: { $avg: "$overall" } } }
           ]),
-          
+
           Order.aggregate([
-            { 
-              $match: { 
-                vendorId: vendor._id, 
+            {
+              $match: {
+                vendorId: vendor._id,
                 createdAt: { $gte: sevenDaysAgo },
-                status: "delivered" 
-              } 
+                status: "delivered"
+              }
             },
             { $unwind: "$items" },
             {
@@ -486,14 +559,14 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
     const todayRevenue = todayOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0
     const todayOrderCount = todayOrders?.length || 0
     const avgOrderValue = todayOrderCount > 0 ? todayRevenue / todayOrderCount : 0
-    
+
     const weeklyRevenue = weeklyOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0
     const weeklyOrderCount = weeklyOrders?.length || 0
 
     let averageRating = 0
     try {
-      averageRating = averageRatingResult?.length > 0 
-        ? Number.parseFloat(averageRatingResult[0].avgRating?.toFixed(1) || 0) 
+      averageRating = averageRatingResult?.length > 0
+        ? Number.parseFloat(averageRatingResult[0].avgRating?.toFixed(1) || 0)
         : 0
     } catch (ratingError) {
       console.error("Rating calculation failed:", ratingError)
@@ -629,7 +702,7 @@ router.put(
       const updateData = req.body
 
       if (updateData.cuisine) {
-        vendor.cuisine = typeof updateData.cuisine === 'string' 
+        vendor.cuisine = typeof updateData.cuisine === 'string'
           ? updateData.cuisine.split(',').map(c => c.trim())
           : updateData.cuisine
       }
@@ -647,9 +720,9 @@ router.put(
 
       for (const [key, value] of Object.entries(updateData)) {
         if (value === undefined || value === null) continue
-        
+
         if (['cuisine', 'operationalHours'].includes(key)) continue
-        
+
         if (key.includes('.')) {
           const keys = key.split('.')
           let target = vendor
@@ -680,7 +753,7 @@ router.put(
 
     } catch (error) {
       console.error("Update vendor profile error:", error)
-      
+
       // Clean up files on error
       if (req.files) {
         Object.values(req.files).flat().forEach(file => {
@@ -689,12 +762,12 @@ router.put(
           }
         })
       }
-      
+
       if (error.name === "ValidationError") {
         const messages = Object.values(error.errors).map(val => val.message)
         return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
       }
-      
+
       next(new ErrorHandler(error.message || "Failed to update profile", 500))
     }
   }
@@ -706,7 +779,7 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
   try {
     console.log("📁 File received:", req.file) // ✅ Debug log
     console.log("📦 Body data:", req.body) // ✅ Debug log
-    
+
     if (!req.user?.isVendor) {
       return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
     }
@@ -716,7 +789,11 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
       return next(new ErrorHandler("Vendor profile not available", 404))
     }
 
-    const { name, description, price, category, isVeg } = req.body
+    const {
+      name, description, price, category, isVeg, isVegan, isGlutenFree,
+      spiceLevel, preparationTime, stock, lowStockThreshold,
+      isPopular, isFeatured, isAvailable
+    } = req.body
 
     if (!name || !price || !category) {
       return next(new ErrorHandler("Menu item name, price, and category are required.", 400))
@@ -724,16 +801,24 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
 
     let imageUrl = ""
     if (req.file) {
-      console.log("🔄 Uploading to Cloudinary...") // ✅ Debug log
+      console.log("🔄 Uploading to Cloudinary...")
       const result = await cloudinary.uploader.upload(req.file.path, {
         folder: "street-eats",
         resource_type: "auto"
       })
       imageUrl = result.secure_url
-      console.log("✅ Cloudinary URL:", imageUrl) // ✅ Debug log
+      console.log("✅ Cloudinary URL:", imageUrl)
       fs.unlinkSync(req.file.path)
-    } else {
-      console.log("❌ No file received from frontend") // ✅ Debug log
+    }
+
+    // Helper to parse JSON fields safely
+    const parseJSON = (field) => {
+      try {
+        if (typeof field === 'string') return JSON.parse(field)
+        return field
+      } catch (e) {
+        return field
+      }
     }
 
     const menuItem = {
@@ -742,8 +827,23 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
       price: Number.parseFloat(price),
       category,
       isVeg: isVeg === "true" || isVeg === true,
-      image: imageUrl, // This should now be Cloudinary URL
-      isAvailable: true,
+      isVegan: isVegan === "true" || isVegan === true,
+      isGlutenFree: isGlutenFree === "true" || isGlutenFree === true,
+      spiceLevel: spiceLevel || "medium",
+      preparationTime: preparationTime ? Number.parseInt(preparationTime) : undefined,
+      stock: stock ? Number.parseInt(stock) : undefined,
+      lowStockThreshold: lowStockThreshold ? Number.parseInt(lowStockThreshold) : undefined,
+      isPopular: isPopular === "true" || isPopular === true,
+      isFeatured: isFeatured === "true" || isFeatured === true,
+      isAvailable: isAvailable !== undefined ? (isAvailable === "true" || isAvailable === true) : true,
+      image: imageUrl,
+
+      // Complex fields (arrays/objects)
+      ingredients: parseJSON(req.body.ingredients) || [],
+      allergens: parseJSON(req.body.allergens) || [],
+      tags: parseJSON(req.body.tags) || [],
+      customizations: parseJSON(req.body.customizations) || [],
+      nutritionalInfo: parseJSON(req.body.nutritionalInfo) || {},
     }
 
     console.log("💾 Saving menu item:", menuItem) // ✅ Debug log
@@ -794,39 +894,51 @@ router.put("/menu/:itemId", auth, upload.single("itemImage"), async (req, res, n
     }
 
     // Update basic fields
-    const fieldsToUpdate = ["name", "category", "description"]
+    // Helper to parse JSON fields safely
+    const parseJSON = (field) => {
+      try {
+        if (typeof field === 'string') return JSON.parse(field)
+        return field
+      } catch (e) {
+        return field
+      }
+    }
+
+    // Update fields
+    const fieldsToUpdate = [
+      "name", "category", "description", "spiceLevel",
+      "preparationTime", "stock", "lowStockThreshold"
+    ]
+
     fieldsToUpdate.forEach((field) => {
       if (req.body[field] !== undefined) {
         menuItem[field] = req.body[field]
       }
     })
 
+    // Numeric conversions
     if (req.body.price) {
       const parsedPrice = parseFloat(req.body.price)
-      if (isNaN(parsedPrice)) {
-        return next(new ErrorHandler("Menu item price must be a valid number.", 400))
-      }
-      menuItem.price = parsedPrice
+      if (!isNaN(parsedPrice)) menuItem.price = parsedPrice
     }
+    if (req.body.preparationTime) menuItem.preparationTime = parseInt(req.body.preparationTime)
+    if (req.body.stock) menuItem.stock = parseInt(req.body.stock)
+    if (req.body.lowStockThreshold) menuItem.lowStockThreshold = parseInt(req.body.lowStockThreshold)
 
-    if (req.body.isVeg !== undefined) {
-      menuItem.isVeg = req.body.isVeg === "true" || req.body.isVeg === true
-    }
-    if (req.body.isAvailable !== undefined) {
-      menuItem.isAvailable = req.body.isAvailable === "true" || req.body.isAvailable === true
-    }
-
-    if (req.body.customizations) {
-      try {
-        const parsedCustomizations = JSON.parse(req.body.customizations)
-        if (!Array.isArray(parsedCustomizations)) {
-          return next(new ErrorHandler("Customizations must be an array.", 400))
-        }
-        menuItem.customizations = parsedCustomizations
-      } catch (err) {
-        return next(new ErrorHandler("Invalid JSON format for customizations.", 400))
+    // Boolean conversions
+    const boolFields = ["isVeg", "isVegan", "isGlutenFree", "isAvailable", "isPopular", "isFeatured"]
+    boolFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        menuItem[field] = req.body[field] === "true" || req.body[field] === true
       }
-    }
+    })
+
+    // Complex fields (JSON parsing)
+    if (req.body.customizations) menuItem.customizations = parseJSON(req.body.customizations) || []
+    if (req.body.ingredients) menuItem.ingredients = parseJSON(req.body.ingredients) || []
+    if (req.body.allergens) menuItem.allergens = parseJSON(req.body.allergens) || []
+    if (req.body.tags) menuItem.tags = parseJSON(req.body.tags) || []
+    if (req.body.nutritionalInfo) menuItem.nutritionalInfo = parseJSON(req.body.nutritionalInfo) || {}
 
     await vendor.save()
 
@@ -962,7 +1074,7 @@ router.post("/payment-settings", auth, async (req, res, next) => {
     }
     const upiRegex = /^[a-zA-Z0-9.\-]+@[a-zA-Z0-9.\-]+$/
     if (upiEnabled && upiId && !upiRegex.test(upiId)) {
-        return next(new ErrorHandler("Invalid UPI ID format.", 400))
+      return next(new ErrorHandler("Invalid UPI ID format.", 400))
     }
 
     vendor.upiId = upiId || null
