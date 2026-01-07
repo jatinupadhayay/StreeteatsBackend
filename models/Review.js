@@ -6,7 +6,6 @@ const reviewSchema = new mongoose.Schema(
     orderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
-      required: true,
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -21,6 +20,14 @@ const reviewSchema = new mongoose.Schema(
     deliveryPartnerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "DeliveryPartner",
+    },
+    menuItemId: {
+      type: String, // String ID of the menu item
+    },
+    type: {
+      type: String,
+      enum: ["vendor", "dish"],
+      default: "vendor",
     },
 
     // Review Content

@@ -1,11 +1,12 @@
 const express = require("express")
-const ErrorHandler =require("../utils/errorHandler");
+const ErrorHandler = require("../utils/errorHandler");
 const bcrypt = require("bcryptjs")
 const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Vendor = require("../models/Vendor")
 const DeliveryPartner = require("../models/DeliveryPartner")
 const { sendWelcomeEmail, sendVendorApprovalEmail } = require("../utils/emailService")
+const { sendOTP } = require("../utils/smsService")
 const upload = require("../middleware/upload")
 
 const router = express.Router()
@@ -118,13 +119,13 @@ router.post(
         isVerified: false,
       })
       console.log(vendorUser);
-     console.log("Saved to collection:", vendorUser.collection.name);
+      console.log("Saved to collection:", vendorUser.collection.name);
 
       const savedUser = await vendorUser.save()
 
-if (!savedUser || !savedUser._id) {
-  return res.status(500).json({ message: "User creation failed. Registration aborted." })
-}
+      if (!savedUser || !savedUser._id) {
+        return res.status(500).json({ message: "User creation failed. Registration aborted." })
+      }
 
       // Handle file uploads
       const shopImage = req.files?.shopImage?.[0]?.path || null
@@ -326,6 +327,14 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" })
     }
 
+    // Check account status
+    if (user.accountStatus !== "active" || !user.isActive) {
+      return res.status(403).json({
+        message: `Your account is ${user.accountStatus || 'inactive'}. Please contact support.`,
+        status: user.accountStatus
+      })
+    }
+
     if (role === "vendor") {
       const vendor = await Vendor.findOne({ userId: user._id })
       if (!vendor || vendor.status !== "approved") {
@@ -334,7 +343,7 @@ router.post("/login", async (req, res) => {
           status: vendor?.status || "not found",
         })
       }
-       
+
     }
 
     if (role === "delivery") {
@@ -366,6 +375,124 @@ router.post("/login", async (req, res) => {
   } catch (error) {
     console.error("Login error:", error)
     res.status(500).json({ message: "Login failed", error: error.message })
+  }
+})
+
+// ------------------------- FORGOT PASSWORD -------------------------
+
+// Step 1: Request OTP
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email, role } = req.body
+
+    if (!email || !role) {
+      return res.status(400).json({ message: "Email and role are required" })
+    }
+
+    const user = await User.findOne({ email, role })
+    if (!user) {
+      return res.status(404).json({ message: "User not found with this email and role" })
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString()
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+
+    user.forgotPasswordOtp = otp
+    user.forgotPasswordOtpExpires = otpExpires
+    await user.save()
+
+    // Send OTP via SMS Service
+    const smsResult = await sendOTP(user.phone, otp);
+
+    // Mask phone number for security
+    const phone = user.phone || ""
+    const maskedPhone = phone.length > 4 ? `+91 ******${phone.slice(-4)}` : "your registered number"
+
+    if (smsResult.success) {
+      res.json({
+        success: true,
+        message: `OTP sent to your registered phone number ${maskedPhone}`,
+        mode: smsResult.mode // "real" or "mock"
+      })
+    } else {
+      res.status(500).json({
+        message: "Failed to send OTP to your phone. Please try again later.",
+        error: smsResult.error
+      })
+    }
+  } catch (error) {
+    console.error("Forgot password error:", error)
+    res.status(500).json({ message: "Failed to process request", error: error.message })
+  }
+})
+
+// Step 2: Verify OTP
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { email, role, otp } = req.body
+
+    if (!email || !role || !otp) {
+      return res.status(400).json({ message: "Email, role, and OTP are required" })
+    }
+
+    const user = await User.findOne({
+      email,
+      role,
+      forgotPasswordOtp: otp,
+      forgotPasswordOtpExpires: { $gt: Date.now() },
+    })
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired OTP" })
+    }
+
+    res.json({
+      success: true,
+      message: "OTP verified successfully",
+    })
+  } catch (error) {
+    console.error("OTP verification error:", error)
+    res.status(500).json({ message: "Verification failed", error: error.message })
+  }
+})
+
+// Step 3: Reset Password
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, role, otp, newPassword } = req.body
+
+    if (!email || !role || !otp || !newPassword) {
+      return res.status(400).json({ message: "All fields are required" })
+    }
+
+    const user = await User.findOne({
+      email,
+      role,
+      forgotPasswordOtp: otp,
+      forgotPasswordOtpExpires: { $gt: Date.now() },
+    })
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired OTP" })
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 12)
+    user.password = hashedPassword
+
+    // Clear OTP fields
+    user.forgotPasswordOtp = undefined
+    user.forgotPasswordOtpExpires = undefined
+    await user.save()
+
+    res.json({
+      success: true,
+      message: "Password reset successful. You can now login with your new password.",
+    })
+  } catch (error) {
+    console.error("Password reset error:", error)
+    res.status(500).json({ message: "Password reset failed", error: error.message })
   }
 })
 

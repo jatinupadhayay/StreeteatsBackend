@@ -1,3 +1,4 @@
+require("dotenv").config()
 const express = require("express")
 const mongoose = require("mongoose")
 const cors = require("cors")
@@ -7,10 +8,9 @@ const http = require("http")
 const path = require("path")
 const socketIo = require("socket.io")
 
-require("dotenv").config()
-
 // ✅ Import models
 const VendorModel = require("./models/Vendor") // make sure the path is correct
+const Order = require("./models/Order")
 
 const app = express()
 const server = http.createServer(app)
@@ -181,6 +181,7 @@ try {
   app.use("/api/rewards", require("./routes/rewards"))
   app.use("/api/gifts", require("./routes/gifts"))
   app.use("/api/upload", require("./routes/upload"))
+  app.use("/api/reviews", require("./routes/reviews"))
 } catch (err) {
   console.error("❌ Failed to load routes:", err.message)
 }
@@ -220,6 +221,44 @@ app.use("*", (req, res) => {
 const PORT = process.env.PORT || 5000
 server.listen(PORT, () => {
   console.log(`🟢 Server running at http://localhost:${PORT}`)
+
+  // ✅ Auto-decline stale orders (every 1 minute)
+  setInterval(async () => {
+    try {
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+
+      const staleOrders = await Order.find({
+        status: { $in: ["placed", "confirmed"] },
+        createdAt: { $lt: tenMinutesAgo }
+      });
+
+      if (staleOrders.length > 0) {
+        console.log(`🕒 System: Auto-declining ${staleOrders.length} stale orders`);
+
+        for (const order of staleOrders) {
+          order.status = "cancelled";
+          order.cancellation = {
+            reason: "Auto-declined: Not accepted by vendor within 10 minutes",
+            cancelledBy: "system"
+          };
+          await order.save();
+
+          // Notify vendor and customer via Socket.IO
+          if (io) {
+            const updatePayload = {
+              orderId: order._id,
+              status: "cancelled",
+              message: "Order auto-cancelled as it was not accepted within 10 minutes"
+            };
+            io.to(`vendor-${order.vendorId}`).emit("order-updated", updatePayload);
+            io.to(`customer-${order.customerId}`).emit("order-updated", updatePayload);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("❌ Auto-decline task error:", err.message);
+    }
+  }, 60 * 1000); // Run every minute
 })
 
 

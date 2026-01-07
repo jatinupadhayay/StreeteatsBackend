@@ -431,6 +431,133 @@ router.put("/payment-settings", auth, async (req, res, next) => {
   }
 })
 
+// GET VENDOR PROMOTIONS
+router.get("/promotions", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor || !req.vendorDetails) {
+      return next(new ErrorHandler("Access denied. Only vendors can access promotions.", 403))
+    }
+
+    res.status(200).json({
+      success: true,
+      promotions: req.vendorDetails.activeOffers || [],
+    })
+  } catch (error) {
+    console.error("Get promotions error:", error)
+    next(new ErrorHandler(error.message || "Failed to fetch promotions", 500))
+  }
+})
+
+// CREATE VENDOR PROMOTION
+router.post("/promotions", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can create promotions.", 403))
+    }
+
+    const { title, description, type, value, minimumOrder, validTill, usageLimit } = req.body
+
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found", 404))
+    }
+
+    const newOffer = {
+      title,
+      description,
+      type,
+      value,
+      minimumOrder,
+      validTill: validTill ? new Date(validTill) : null,
+      usageLimit,
+      isActive: true,
+      usedCount: 0
+    }
+
+    if (!vendor.activeOffers) {
+      vendor.activeOffers = []
+    }
+
+    vendor.activeOffers.push(newOffer)
+    await vendor.save()
+
+    res.status(201).json({
+      success: true,
+      message: "Promotion created successfully",
+      promotion: vendor.activeOffers[vendor.activeOffers.length - 1]
+    })
+  } catch (error) {
+    console.error("Create promotion error:", error)
+    next(new ErrorHandler(error.message || "Failed to create promotion", 500))
+  }
+})
+
+// LIKE VENDOR
+router.put("/:id/like", auth, async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id)
+    if (!vendor) return next(new ErrorHandler("Vendor not found", 404))
+
+    const userId = req.user.userId
+    const index = vendor.likedBy.indexOf(userId)
+
+    if (index === -1) {
+      vendor.likedBy.push(userId)
+      vendor.analytics.likes = (vendor.analytics.likes || 0) + 1
+    } else {
+      vendor.likedBy.splice(index, 1)
+      vendor.analytics.likes = Math.max(0, (vendor.analytics.likes || 0) - 1)
+    }
+
+    await vendor.save()
+    res.json({ success: true, likes: vendor.analytics.likes, isLiked: index === -1 })
+  } catch (error) {
+    next(new ErrorHandler("Failed to like vendor", 500))
+  }
+})
+
+// SHARE VENDOR
+router.put("/:id/share", async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id)
+    if (!vendor) return next(new ErrorHandler("Vendor not found", 404))
+
+    vendor.analytics.shares = (vendor.analytics.shares || 0) + 1
+    await vendor.save()
+    res.json({ success: true, shares: vendor.analytics.shares })
+  } catch (error) {
+    next(new ErrorHandler("Failed to update share count", 500))
+  }
+})
+
+// DELETE VENDOR PROMOTION
+router.delete("/promotions/:id", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) {
+      return next(new ErrorHandler("Access denied. Only vendors can delete promotions.", 403))
+    }
+
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found", 404))
+    }
+
+    vendor.activeOffers = vendor.activeOffers.filter(
+      offer => offer._id.toString() !== req.params.id
+    )
+
+    await vendor.save()
+
+    res.status(200).json({
+      success: true,
+      message: "Promotion deleted successfully"
+    })
+  } catch (error) {
+    console.error("Delete promotion error:", error)
+    next(new ErrorHandler(error.message || "Failed to delete promotion", 500))
+  }
+})
+
 router.get("/:id", async (req, res, next) => {
   try {
     const vendor = await Vendor.findById(req.params.id).populate("userId", "name email phone")

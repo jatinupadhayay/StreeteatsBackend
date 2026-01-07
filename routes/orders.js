@@ -502,7 +502,7 @@ router.put("/:orderId/rate", auth, async (req, res) => {
       return res.status(403).json({ message: "Only customers can rate orders" })
     }
 
-    const { food, delivery, overall, review } = req.body
+    const { food, delivery, overall, review, dishRatings = [] } = req.body
     const order = await Order.findById(req.params.orderId)
 
     if (!order) {
@@ -521,6 +521,45 @@ router.put("/:orderId/rate", auth, async (req, res) => {
     order.rating = { food, delivery, overall, review }
     await order.save()
 
+    // Create a persistent Review document for the vendor
+    const newReview = new Review({
+      orderId: order._id,
+      customerId: req.user.userId,
+      vendorId: order.vendorId,
+      deliveryPartnerId: order.deliveryPartnerId,
+      type: "vendor",
+      ratings: {
+        food: { overall: food || overall },
+        delivery: { overall: delivery || overall },
+      },
+      comments: {
+        overall: review
+      },
+      status: "approved"
+    })
+    await newReview.save()
+
+    // Create dish-specific reviews if provided
+    if (dishRatings && dishRatings.length > 0) {
+      for (const dishRating of dishRatings) {
+        const dishReview = new Review({
+          orderId: order._id,
+          customerId: req.user.userId,
+          vendorId: order.vendorId,
+          menuItemId: dishRating.menuItemId,
+          type: "dish",
+          ratings: {
+            food: { overall: dishRating.rating },
+          },
+          comments: {
+            overall: dishRating.comment
+          },
+          status: "approved"
+        })
+        await dishReview.save()
+      }
+    }
+
     // Update vendor rating
     const vendor = await Vendor.findById(order.vendorId)
     if (vendor) {
@@ -529,6 +568,13 @@ router.put("/:orderId/rate", auth, async (req, res) => {
 
       vendor.rating.average = newAverage
       vendor.rating.count = newRatingCount
+
+      // Update breakdown as well
+      const stars = Math.round(overall)
+      if (stars >= 1 && stars <= 5) {
+        vendor.rating.breakdown[stars] = (vendor.rating.breakdown[stars] || 0) + 1
+      }
+
       await vendor.save()
     }
 
