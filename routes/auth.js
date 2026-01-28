@@ -173,10 +173,19 @@ router.post(
       sendVendorApprovalEmail(vendor).catch(err => console.error("Vendor approval email failed:", err.message));
       sendWelcomeEmail(email, ownerName, "vendor").catch(err => console.error("Welcome email failed:", err.message));
 
+      const token = jwt.sign({ userId: vendor.userId, role: "vendor" }, process.env.JWT_SECRET, { expiresIn: "7d" })
+
       res.status(201).json({
         message: "Vendor registration submitted successfully. Awaiting admin approval.",
-        vendorId: vendor._id,
-        status: "pending",
+        token,
+        user: {
+          id: vendor.userId,
+          _id: vendor.userId,
+          name: ownerName,
+          email: email,
+          role: "vendor",
+          status: "pending"
+        }
       })
     } catch (error) {
       console.error("Vendor registration error:", error)
@@ -282,14 +291,20 @@ router.post(
         message: `Dear ${name},\n\nThank you for registering as a delivery partner...`,
       }).catch(err => console.error("Delivery welcome email failed:", err.message));
 
+      const token = jwt.sign({ userId: user._id, role: "delivery" }, process.env.JWT_SECRET, { expiresIn: "7d" })
+
       res.status(201).json({
         success: true,
-        message: "Delivery partner registration successful. Awaiting admin approval.",
-        deliveryPartner: {
-          id: newDeliveryPartner._id,
-          name,
-          status: newDeliveryPartner.status,
-        },
+        message: "Delivery partner skipping verification for demo",
+        token,
+        user: {
+          id: user._id,
+          _id: user._id,
+          name: name,
+          email: email,
+          role: "delivery",
+          status: "pending"
+        }
       });
     } catch (error) {
       console.error("Delivery partner registration error:", error);
@@ -485,5 +500,34 @@ router.post("/reset-password", async (req, res) => {
     res.status(500).json({ message: "Password reset failed", error: error.message })
   }
 })
+
+
+// Admin Approval Route (Simplified for Demo)
+router.get("/approve-vendor/:id", async (req, res) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id);
+    if (!vendor) return res.status(404).send("Vendor not found");
+
+    vendor.status = "approved";
+    vendor.isActive = true;
+    await vendor.save();
+
+    const user = await User.findById(vendor.userId);
+    if (user) {
+      user.accountStatus = "active";
+      await user.save();
+    }
+
+    res.send(`
+      <div style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1 style="color: #4CAF50;">✅ Vendor Approved!</h1>
+        <p>Vendor <strong>${vendor.shopName}</strong> has been successfully approved.</p>
+        <p>They can now access their dashboard and receive orders.</p>
+      </div>
+    `);
+  } catch (error) {
+    res.status(500).send("Approval failed: " + error.message);
+  }
+});
 
 module.exports = router

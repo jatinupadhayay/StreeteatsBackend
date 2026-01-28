@@ -188,7 +188,14 @@ const sendVendorApprovalEmail = async (vendor) => {
             <p><strong>Address:</strong> ${vendor.address.street}, ${vendor.address.city}</p>
           </div>
           
-          <p>Please review and approve this vendor registration in the admin panel.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/approve-vendor/${vendor._id}" 
+               style="background-color: #ff6b35; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+               Approve Vendor Now
+            </a>
+          </div>
+          
+          <p>Please review and approve this vendor registration in the admin panel if manual check is required.</p>
         </div>
       `,
     }
