@@ -704,7 +704,14 @@ router.get("/:orderId/tracking", async (req, res) => {
           shopName: order.vendorId.shopName,
           address: order.vendorId.address,
           images: order.vendorId.images,
-          contact: order.vendorId.contact
+          contact: order.vendorId.contact,
+          upiPayment: order.vendorId.upiEnabled ? {
+            enabled: true,
+            upiId: order.vendorId.upiId,
+            upiName: order.vendorId.upiName,
+          } : {
+            enabled: false,
+          },
         }
       },
       deliveryPerson
