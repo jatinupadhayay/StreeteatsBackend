@@ -39,11 +39,8 @@ router.post("/register/customer", async (req, res) => {
 
     await customer.save()
 
-    try {
-      await sendWelcomeEmail(email, name, "customer")
-    } catch (err) {
-      console.log("Email sending failed:", err.message)
-    }
+    // Non-blocking email sending
+    sendWelcomeEmail(email, name, "customer").catch(err => console.error("Background email failed:", err.message));
 
     const token = jwt.sign({ userId: customer._id, role: "user" }, process.env.JWT_SECRET, { expiresIn: "7d" })
 
@@ -172,13 +169,9 @@ router.post(
 
       await vendor.save()
 
-      // Send emails
-      try {
-        await sendVendorApprovalEmail(vendor)
-        await sendWelcomeEmail(email, ownerName, "vendor")
-      } catch (emailError) {
-        console.log("Email sending failed:", emailError.message)
-      }
+      // Non-blocking email sending
+      sendVendorApprovalEmail(vendor).catch(err => console.error("Vendor approval email failed:", err.message));
+      sendWelcomeEmail(email, ownerName, "vendor").catch(err => console.error("Welcome email failed:", err.message));
 
       res.status(201).json({
         message: "Vendor registration submitted successfully. Awaiting admin approval.",
@@ -282,11 +275,12 @@ router.post(
       user.deliveryPartnerId = newDeliveryPartner._id;
       await user.save();
 
-      await sendWelcomeEmail({
+      // Non-blocking email sending
+      sendWelcomeEmail({
         email: newDeliveryPartner.personalDetails.email,
         subject: "Delivery Partner Registration Received - Street Eats",
         message: `Dear ${name},\n\nThank you for registering as a delivery partner...`,
-      });
+      }).catch(err => console.error("Delivery welcome email failed:", err.message));
 
       res.status(201).json({
         success: true,
