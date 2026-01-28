@@ -83,6 +83,13 @@ router.get("/", async (req, res, next) => {
         }
 
         const [vendorLng, vendorLat] = vendor.address.coordinates
+
+        // Treat [0, 0] as unset/invalid location
+        if (vendorLng === 0 && vendorLat === 0) {
+          vendorDistanceMap.set(String(vendor._id), null)
+          return
+        }
+
         const distanceKm = calculateDistance(userLat, userLng, vendorLat, vendorLng)
         vendorDistanceMap.set(String(vendor._id), distanceKm)
 
