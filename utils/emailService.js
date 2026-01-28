@@ -200,10 +200,55 @@ const sendVendorApprovalEmail = async (vendor) => {
   }
 }
 
+// Send password reset OTP email
+const sendPasswordResetOTP = async (email, otp) => {
+  try {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.log("Email service not configured, skipping OTP email send")
+      return { success: false, mode: "mock", otp }
+    }
+
+    const transporter = createTransporter()
+
+    const mailOptions = {
+      from: process.env.SMTP_USER,
+      to: email,
+      subject: "Password Reset Verification Code - Street Eats",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+          <div style="background-color: #ff6b35; padding: 20px; text-align: center;">
+            <h1 style="color: white; margin: 0;">Street Eats</h1>
+          </div>
+          <div style="padding: 30px; color: #333 text-align: center;">
+            <h2 style="color: #333;">Password Reset Request</h2>
+            <p>We received a request to reset your password. Use the verification code below to proceed:</p>
+            <div style="background-color: #fff0eb; padding: 20px; border-radius: 8px; margin: 25px 0; display: inline-block;">
+              <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #ff6b35;">${otp}</span>
+            </div>
+            <p style="color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
+            <p style="color: #666; font-size: 14px;">If you didn't request this, you can safely ignore this email.</p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #999;">
+            <p>© 2026 Street Eats. All rights reserved.</p>
+          </div>
+        </div>
+      `,
+    }
+
+    await transporter.sendMail(mailOptions)
+    console.log(`Password reset OTP sent to ${email}`)
+    return { success: true, mode: "real" }
+  } catch (error) {
+    console.error("OTP email sending error:", error.message)
+    return { success: false, error: error.message }
+  }
+}
+
 module.exports = {
   testEmailConnection,
   sendWelcomeEmail,
   sendOrderConfirmationEmail,
   sendOrderStatusEmail,
   sendVendorApprovalEmail,
+  sendPasswordResetOTP,
 }

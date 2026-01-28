@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/User")
 const Vendor = require("../models/Vendor")
 const DeliveryPartner = require("../models/DeliveryPartner")
-const { sendWelcomeEmail, sendVendorApprovalEmail } = require("../utils/emailService")
+const { sendWelcomeEmail, sendVendorApprovalEmail, sendPasswordResetOTP } = require("../utils/emailService")
 const { sendOTP } = require("../utils/smsService")
 const upload = require("../middleware/upload")
 
@@ -383,15 +383,15 @@ router.post("/login", async (req, res) => {
 // Step 1: Request OTP
 router.post("/forgot-password", async (req, res) => {
   try {
-    const { email, role } = req.body
+    const { email, phone, role } = req.body
 
-    if (!email || !role) {
-      return res.status(400).json({ message: "Email and role are required" })
+    if (!email || !phone || !role) {
+      return res.status(400).json({ message: "Email, phone number, and role are required" })
     }
 
-    const user = await User.findOne({ email, role })
+    const user = await User.findOne({ email, phone, role })
     if (!user) {
-      return res.status(404).json({ message: "User not found with this email and role" })
+      return res.status(404).json({ message: "No account found with this email, phone, and role combination." })
     }
 
     // Generate 6-digit OTP
@@ -402,23 +402,19 @@ router.post("/forgot-password", async (req, res) => {
     user.forgotPasswordOtpExpires = otpExpires
     await user.save()
 
-    // Send OTP via SMS Service
-    const smsResult = await sendOTP(user.phone, otp);
+    // Send OTP via Email Service
+    const emailResult = await sendPasswordResetOTP(user.email, otp);
 
-    // Mask phone number for security
-    const phone = user.phone || ""
-    const maskedPhone = phone.length > 4 ? `+91 ******${phone.slice(-4)}` : "your registered number"
-
-    if (smsResult.success) {
+    if (emailResult.success || emailResult.mode === "mock") {
       res.json({
         success: true,
-        message: `OTP sent to your registered phone number ${maskedPhone}`,
-        mode: smsResult.mode // "real" or "mock"
+        message: `Verification code sent to your registered email address: ${email}`,
+        mode: emailResult.mode // "real" or "mock"
       })
     } else {
       res.status(500).json({
-        message: "Failed to send OTP to your phone. Please try again later.",
-        error: smsResult.error
+        message: "Failed to send verification code to your email. Please try again later.",
+        error: emailResult.error
       })
     }
   } catch (error) {
