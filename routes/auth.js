@@ -346,13 +346,17 @@ router.post("/login", async (req, res) => {
 
     if (role === "vendor") {
       const vendor = await Vendor.findOne({ userId: user._id })
-      if (!vendor || vendor.status !== "approved") {
+      if (!vendor) {
+        return res.status(404).json({ message: "Vendor profile not found" })
+      }
+      // Allow pending/approved vendors to login. 
+      // Rejected/suspended vendors should still be blocked if needed, checking isActive might be better for that.
+      if (vendor.status === "rejected" || vendor.status === "suspended") {
         return res.status(403).json({
-          message: "Your vendor account is still pending approval",
-          status: vendor?.status || "not found",
+          message: `Your vendor account has been ${vendor.status}`,
+          status: vendor.status,
         })
       }
-
     }
 
     if (role === "delivery") {
