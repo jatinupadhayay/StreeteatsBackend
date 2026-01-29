@@ -261,14 +261,14 @@ router.put("/:orderId/status", auth, async (req, res) => {
 
     // Check permissions
     if (req.user.role === "vendor") {
-      console.log('Auth User ID:', req.user.userId);
-      console.log('Order Vendor:', {
-        _id: order.vendorId._id,
-        userId: order.vendorId.userId
-      });
+      // Ensure vendorId exists and wasn't lost during populate
+      if (!order.vendorId) {
+        return res.status(404).json({ message: "Vendor account associated with this order not found" });
+      }
 
       // Compare the vendor's userId with the authenticated user's ID
-      if (order.vendorId.userId.toString() !== req.user.userId.toString()) {
+      // Safe check with optional chaining just in case
+      if (order.vendorId.userId?.toString() !== req.user.userId.toString()) {
         return res.status(403).json({ message: "Access denied - vendor mismatch" });
       }
     }
@@ -296,7 +296,7 @@ router.put("/:orderId/status", auth, async (req, res) => {
         if (io) {
           io.to(`delivery-${availablePartner._id}`).emit("new-delivery-request", {
             orderId: order._id,
-            vendor: order.vendorId,
+            vendor: order.vendorId, // This is populated, so it sends full vendor info
             customer: order.customerId,
             deliveryAddress: order.deliveryAddress,
             total: order.pricing.total,
@@ -309,10 +309,14 @@ router.put("/:orderId/status", auth, async (req, res) => {
     if (status === "delivered") {
       order.actualDeliveryTime = new Date()
 
-      const vendor = await Vendor.findById(order.vendorId)
-      if (vendor) {
-        vendor.totalRevenue += order.pricing.total
-        await vendor.save()
+      // We need to fetch vendor again or use the populated one safely
+      // Since order.vendorId is populated, we can treat it as a document if we are careful, 
+      // but save() might not work on a populated field sub-document directly depending on mongoose version.
+      // Better to findById update to be safe and separate.
+      if (order.vendorId && order.vendorId._id) {
+        await Vendor.findByIdAndUpdate(order.vendorId._id, {
+          $inc: { totalRevenue: order.pricing.total }
+        });
       }
 
       if (order.deliveryPartnerId) {
@@ -335,35 +339,44 @@ router.put("/:orderId/status", auth, async (req, res) => {
         customer: order.customerId,
       }
 
+      const vendorIdString = order.vendorId._id.toString();
+
       // ✅ Emit vendor-side update
-      console.log("📤 Emitting 'order-status-updated' to", `vendor-${order.vendorId}`)
+      console.log("📤 Emitting 'order-status-updated' to", `vendor-${vendorIdString}`)
 
       // When updating order status
-      io.to(`vendor-${order.vendorId}`).emit("order-status-updated", { // Changed from "order_updated"
+      io.to(`vendor-${vendorIdString}`).emit("order-status-updated", {
         orderId: order._id,
         status: order.status,
         message: getStatusMessage(status, order.orderType),
         order: enrichedOrder,
       });
+
       // ✅ Emit customer-side update
-      io.to(`customer-${order.customerId._id}`).emit("order-status-updated", {
-        orderId: order._id,
-        status: order.status,
-        message: getStatusMessage(status, order.orderType),
-      })
+      if (order.customerId && order.customerId._id) {
+        io.to(`customer-${order.customerId._id}`).emit("order-status-updated", {
+          orderId: order._id,
+          status: order.status,
+          message: getStatusMessage(status, order.orderType),
+        })
+      }
 
       // ✅ Emit delivery-side update
       if (order.deliveryPartnerId) {
-        io.to(`delivery-${order.deliveryPartnerId}`).emit("order-status-updated", {
+        // Handle if deliveryPartnerId is an ID or object (though we populated it as _id on line 258, wait line 258 says populate("deliveryPartnerId", "_id"))
+        // Actually line 258: .populate("deliveryPartnerId", "_id");
+        // So order.deliveryPartnerId is an object { _id: ... }
+        const dpId = order.deliveryPartnerId._id || order.deliveryPartnerId;
+        io.to(`delivery-${dpId}`).emit("order-status-updated", {
           orderId: order._id,
           status: order.status,
         })
       }
 
       // ✅ Emit order completed event separately
-      console.log("📤 Emitting 'order-completed' to", `vendor-${order.vendorId}`)
+      console.log("📤 Emitting 'order-completed' to", `vendor-${vendorIdString}`)
       if (status === "delivered" || status === "picked_up") {
-        io.to(`vendor-${order.vendorId}`).emit("order-completed", enrichedOrder)
+        io.to(`vendor-${vendorIdString}`).emit("order-completed", enrichedOrder)
       }
     }
 
