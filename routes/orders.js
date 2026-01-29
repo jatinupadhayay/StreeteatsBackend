@@ -261,16 +261,28 @@ router.put("/:orderId/status", auth, async (req, res) => {
 
     // Check permissions
     if (req.user.role === "vendor") {
-      // Ensure vendorId exists and wasn't lost during populate
+      console.log('--- DEBUG: Vendor Order Update Permissions ---');
+      console.log('Req User ID:', req.user.userId, typeof req.user.userId);
+
       if (!order.vendorId) {
+        console.error('ERROR: order.vendorId is missing/null');
         return res.status(404).json({ message: "Vendor account associated with this order not found" });
       }
 
-      // Compare the vendor's userId with the authenticated user's ID
+      console.log('Order Vendor Object:', order.vendorId);
+      console.log('Order Vendor User ID:', order.vendorId.userId, typeof order.vendorId.userId);
+
       // Safe check with optional chaining just in case
-      if (order.vendorId.userId?.toString() !== req.user.userId.toString()) {
+      const vendorUserId = order.vendorId.userId ? order.vendorId.userId.toString() : null;
+      const reqUserId = req.user.userId ? req.user.userId.toString() : null;
+
+      console.log(' Comparison:', `${vendorUserId} === ${reqUserId}`);
+
+      if (vendorUserId !== reqUserId) {
+        console.error('ACCESS DENIED: Vendor mismatch');
         return res.status(403).json({ message: "Access denied - vendor mismatch" });
       }
+      console.log('--- Permissions Verified ---');
     }
 
 
