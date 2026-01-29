@@ -44,10 +44,7 @@ function formatDistance(distance) {
 router.get("/", async (req, res, next) => {
   try {
     const { cuisine, search, lat, lng, radius } = req.query
-
     const query = { status: "approved", isActive: true }
-
-
 
     if (search) {
       query.$or = [
@@ -58,10 +55,8 @@ router.get("/", async (req, res, next) => {
     }
 
     const vendorsRaw = await Vendor.find(query).populate("userId", "name email phone").lean()
-
     const vendorDistanceMap = new Map()
     let vendors = vendorsRaw
-
     const hasLocation = lat !== undefined && lng !== undefined && lat !== "" && lng !== ""
 
     if (hasLocation) {
@@ -74,30 +69,22 @@ router.get("/", async (req, res, next) => {
       }
 
       const filteredVendors = []
-
       vendorsRaw.forEach((vendor) => {
         if (!vendor.address || !vendor.address.coordinates || vendor.address.coordinates.length < 2) {
-          console.warn(`Vendor ${vendor._id} missing valid coordinates. Skipping distance calculation.`)
           vendorDistanceMap.set(String(vendor._id), null)
           return
         }
-
         const [vendorLng, vendorLat] = vendor.address.coordinates
-
-        // Treat [0, 0] as unset/invalid location
         if (vendorLng === 0 && vendorLat === 0) {
           vendorDistanceMap.set(String(vendor._id), null)
           return
         }
-
         const distanceKm = calculateDistance(userLat, userLng, vendorLat, vendorLng)
         vendorDistanceMap.set(String(vendor._id), distanceKm)
-
         if (distanceKm <= searchRadius) {
           filteredVendors.push(vendor)
         }
       })
-
       vendors = filteredVendors
     } else {
       vendorsRaw.forEach((vendor) => {
@@ -123,7 +110,7 @@ router.get("/", async (req, res, next) => {
           gallery: vendor.images?.gallery || [],
         },
         isActive: vendor.isActive,
-        menu: vendor.menu.filter((item) => item.isAvailable),
+        menu: (vendor.menu || []).filter((item) => item.isAvailable),
       })),
     })
   } catch (error) {
@@ -132,10 +119,10 @@ router.get("/", async (req, res, next) => {
   }
 })
 
+// TRENDING DISHES
 router.get("/trending/dishes", async (req, res, next) => {
   try {
     const { lat, lng, radius, limit, days } = req.query
-
     const limitNum = Math.min(Number.parseInt(limit, 10) || DEFAULT_TRENDING_LIMIT, 50)
     const windowDaysRaw = Number.parseInt(days, 10)
     const windowDays = Math.min(Math.max(windowDaysRaw || DEFAULT_TRENDING_WINDOW_DAYS, 1), 90)
@@ -146,433 +133,188 @@ router.get("/trending/dishes", async (req, res, next) => {
 
     const vendorsRaw = await Vendor.find({ status: "approved", isActive: true }).lean()
     if (vendorsRaw.length === 0) {
-      return res.json({
-        success: true,
-        dishes: [],
-        metadata: {
-          total: 0,
-          limit: limitNum,
-          radiusKm,
-          hasLocation: false,
-          fallbackUsed: true,
-          windowDays,
-        },
-      })
+      return res.json({ success: true, dishes: [], metadata: { total: 0, limit: limitNum, radiusKm, windowDays } })
     }
 
     const vendorMap = new Map()
-    vendorsRaw.forEach((vendor) => {
-      vendorMap.set(String(vendor._id), { vendor, distanceKm: null })
-    })
+    vendorsRaw.forEach((vendor) => vendorMap.set(String(vendor._id), { vendor, distanceKm: null }))
 
     let hasLocation = false
-    let userLat
-    let userLng
+    let userLat, userLng
     if (lat !== undefined && lng !== undefined && lat !== "" && lng !== "") {
-      const parsedLat = Number.parseFloat(lat)
-      const parsedLng = Number.parseFloat(lng)
-      if (Number.isNaN(parsedLat) || Number.isNaN(parsedLng)) {
-        return next(new ErrorHandler("Invalid latitude or longitude provided.", 400))
-      }
-      userLat = parsedLat
-      userLng = parsedLng
-      hasLocation = true
+      userLat = Number.parseFloat(lat)
+      userLng = Number.parseFloat(lng)
+      if (!Number.isNaN(userLat) && !Number.isNaN(userLng)) hasLocation = true
     }
 
     let filteredVendors = vendorsRaw
-    let fallbackUsed = false
-
     if (hasLocation) {
       const withinRadius = []
-
       vendorsRaw.forEach((vendor) => {
         const coords = vendor.address?.coordinates
-        let distanceKm = null
         if (Array.isArray(coords) && coords.length >= 2) {
-          const [vendorLng, vendorLat] = coords
-          distanceKm = calculateDistance(userLat, userLng, vendorLat, vendorLng)
-        } else {
-          console.warn(`Vendor ${vendor._id} missing coordinates for trending distance calculation.`)
-        }
-
-        vendorMap.set(String(vendor._id), { vendor, distanceKm })
-
-        if (distanceKm != null && distanceKm <= radiusKm) {
-          withinRadius.push(vendor)
+          const distanceKm = calculateDistance(userLat, userLng, coords[1], coords[0])
+          vendorMap.set(String(vendor._id), { vendor, distanceKm })
+          if (distanceKm <= radiusKm) withinRadius.push(vendor)
         }
       })
-
-      filteredVendors = withinRadius
-      if (filteredVendors.length === 0) {
-        filteredVendors = vendorsRaw
-        fallbackUsed = true
-      }
+      if (withinRadius.length > 0) filteredVendors = withinRadius
     }
 
-    if (filteredVendors.length === 0) {
-      return res.json({
-        success: true,
-        dishes: [],
-        metadata: {
-          total: 0,
-          limit: limitNum,
-          radiusKm,
-          hasLocation,
-          fallbackUsed: fallbackUsed || !hasLocation,
-          windowDays,
-        },
-      })
-    }
-
-    const vendorIds = filteredVendors.map((vendor) => vendor._id)
-    const matchStage = {
-      vendorId: { $in: vendorIds },
-      status: { $nin: ["cancelled"] },
-    }
-
-    if (windowDays > 0) {
-      matchStage.createdAt = {
-        $gte: new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000),
-      }
-    }
+    const vendorIds = filteredVendors.map((v) => v._id)
+    const matchStage = { vendorId: { $in: vendorIds }, status: { $nin: ["cancelled"] } }
+    if (windowDays > 0) matchStage.createdAt = { $gte: new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000) }
 
     const aggregation = await Order.aggregate([
       { $match: matchStage },
       { $unwind: "$items" },
       {
         $group: {
-          _id: {
-            vendorId: "$vendorId",
-            menuItemId: "$items.menuItemId",
-          },
+          _id: { vendorId: "$vendorId", menuItemId: "$items.menuItemId" },
           totalOrders: { $sum: "$items.quantity" },
           lastOrderedAt: { $max: "$updatedAt" },
-          lastCreatedAt: { $max: "$createdAt" },
         },
       },
       { $sort: { totalOrders: -1, lastOrderedAt: -1 } },
-      { $limit: limitNum * 3 },
+      { $limit: limitNum * 2 },
     ])
 
     const dishes = []
     const seenDishIds = new Set()
-
     aggregation.forEach((entry) => {
-      const vendorId = entry._id.vendorId.toString()
-      const menuItemId = entry._id.menuItemId
-      const vendorEntry = vendorMap.get(vendorId)
-      if (!vendorEntry) {
-        return
-      }
-
-      const vendor = vendorEntry.vendor
-      const menuItem = (vendor.menu || []).find((item) => String(item._id) === menuItemId)
-      if (!menuItem || menuItem.isAvailable === false) {
-        return
-      }
-
-      if (seenDishIds.has(menuItemId)) {
-        return
-      }
-
-      seenDishIds.add(menuItemId)
+      const vendorEntry = vendorMap.get(entry._id.vendorId.toString())
+      if (!vendorEntry) return
+      const menuItem = (vendorEntry.vendor.menu || []).find((item) => String(item._id) === entry._id.menuItemId)
+      if (!menuItem || !menuItem.isAvailable || seenDishIds.has(entry._id.menuItemId)) return
+      seenDishIds.add(entry._id.menuItemId)
       dishes.push({
-        id: menuItemId,
+        id: entry._id.menuItemId,
         name: menuItem.name,
-        description: menuItem.description,
         price: menuItem.price,
         image: menuItem.image,
-        category: menuItem.category,
         totalOrders: entry.totalOrders,
-        lastOrderedAt: entry.lastOrderedAt || entry.lastCreatedAt || null,
-        vendor: {
-          id: vendor._id,
-          shopName: vendor.shopName,
-          rating: vendor.rating,
-          distanceKm: formatDistance(vendorEntry.distanceKm),
-          address: vendor.address,
-          images: vendor.images,
-        },
+        vendor: { id: vendorEntry.vendor._id, shopName: vendorEntry.vendor.shopName, distanceKm: formatDistance(vendorEntry.distanceKm) }
       })
     })
 
-    if (dishes.length < limitNum) {
-      fallbackUsed = true
-
-      for (const vendor of filteredVendors) {
-        const vendorEntry = vendorMap.get(String(vendor._id)) || { distanceKm: null }
-
-        const recommendedMenu = (vendor.menu || [])
-          .filter((item) => item && item.isAvailable !== false)
-          .sort((a, b) => {
-            const scoreA = (a.isFeatured ? 2 : 0) + (a.isPopular ? 1 : 0)
-            const scoreB = (b.isFeatured ? 2 : 0) + (b.isPopular ? 1 : 0)
-            return scoreB - scoreA
-          })
-          .slice(0, 3)
-
-        for (const item of recommendedMenu) {
-          const dishId = String(item._id)
-          if (seenDishIds.has(dishId)) {
-            continue
-          }
-
-          seenDishIds.add(dishId)
-          dishes.push({
-            id: dishId,
-            name: item.name,
-            description: item.description,
-            price: item.price,
-            image: item.image,
-            category: item.category,
-            totalOrders: 0,
-            lastOrderedAt: null,
-            vendor: {
-              id: vendor._id,
-              shopName: vendor.shopName,
-              rating: vendor.rating,
-              distanceKm: formatDistance(vendorEntry.distanceKm),
-              address: vendor.address,
-              images: vendor.images,
-            },
-          })
-
-          if (dishes.length >= limitNum) {
-            break
-          }
-        }
-
-        if (dishes.length >= limitNum) {
-          break
-        }
-      }
-    }
-
-    res.json({
-      success: true,
-      dishes: dishes.slice(0, limitNum),
-      metadata: {
-        total: Math.min(dishes.length, limitNum),
-        limit: limitNum,
-        radiusKm,
-        hasLocation,
-        fallbackUsed,
-        windowDays,
-      },
-    })
+    res.json({ success: true, dishes: dishes.slice(0, limitNum) })
   } catch (error) {
     console.error("Trending dishes error:", error)
     next(new ErrorHandler("Failed to fetch trending dishes", 500))
   }
 })
 
+// GET VENDOR DASHBOARD (Fresh direct fetch)
+router.get("/dashboard/stats", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) return next(new ErrorHandler("Vendor profile not found", 404))
+
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+
+    const [todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, avgRatingResult] = await Promise.all([
+      Order.find({ vendorId: vendor._id, createdAt: { $gte: today }, status: { $ne: "cancelled" } }).lean(),
+      Order.find({ vendorId: vendor._id, status: { $in: ["placed", "accepted", "preparing"] } }).populate("customerId", "name phone").lean(),
+      Order.find({ vendorId: vendor._id, createdAt: { $gte: sevenDaysAgo }, status: "delivered" }).lean(),
+      Review.find({ vendorId: vendor._id }).sort({ createdAt: -1 }).limit(5).populate("customerId", "name").lean(),
+      Review.countDocuments({ vendorId: vendor._id }),
+      Review.aggregate([{ $match: { vendorId: vendor._id } }, { $group: { _id: null, avg: { $avg: "$overall" } } }])
+    ])
+
+    const todayRevenue = todayOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+    const weeklyRevenue = weeklyOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+    const averageRating = avgRatingResult.length > 0 ? parseFloat(avgRatingResult[0].avg.toFixed(1)) : 0
+
+    res.json({
+      success: true,
+      vendor: { id: vendor._id, shopName: vendor.shopName, stats: vendor.stats || {} },
+      todayStats: { orders: todayOrders.length, revenue: todayRevenue },
+      weeklyStats: { orders: weeklyOrders.length, revenue: weeklyRevenue },
+      customerFeedback: { averageRating, totalReviews, recentReviews: vendorReviews.map(r => ({ customer: r.customerId?.name || "Anonymous", rating: r.overall, comment: r.review })) },
+      pendingOrders: pendingOrders.map(o => ({ id: o._id, customerName: o.customerId?.name || "N/A", items: o.items, total: o.pricing?.total }))
+    })
+  } catch (error) {
+    next(new ErrorHandler("Failed to load dashboard", 500))
+  }
+})
 
 // GET PAYMENT SETTINGS
 router.get("/payment-settings", auth, async (req, res, next) => {
   try {
-    // req.vendorDetails is populated by auth middleware if user is a vendor
-    if (!req.user?.isVendor || !req.vendorDetails) {
-      return next(new ErrorHandler("Access denied. Only vendors can access payment settings.", 403))
-    }
-
-    res.status(200).json({
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId }).lean()
+    if (!vendor) return next(new ErrorHandler("Vendor not found", 404))
+    res.json({
       success: true,
       settings: {
-        upiId: req.vendorDetails.businessDetails?.upiId || "",
-        upiName: req.vendorDetails.businessDetails?.upiName || "",
-        upiEnabled: req.vendorDetails.businessDetails?.upiEnabled || false,
-      },
+        upiId: vendor.businessDetails?.upiId || "",
+        upiName: vendor.businessDetails?.upiName || "",
+        upiEnabled: vendor.businessDetails?.upiEnabled || false,
+      }
     })
   } catch (error) {
-    console.error("Get payment settings error:", error)
-    next(new ErrorHandler(error.message || "Failed to fetch payment settings", 500))
+    next(new ErrorHandler("Failed to fetch payment settings", 500))
   }
 })
 
 // UPDATE PAYMENT SETTINGS
 router.put("/payment-settings", auth, async (req, res, next) => {
   try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can update payment settings.", 403))
-    }
-
-    const { upiId, upiName, upiEnabled } = req.body
-
-    // We need the full Mongoose document to call .save(), req.vendorDetails might be lean
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
     const vendor = await Vendor.findOne({ userId: req.user.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found", 404))
-    }
+    if (!vendor) return next(new ErrorHandler("Vendor profile not found", 404))
 
-    // Initialize businessDetails if missing
-    if (!vendor.businessDetails) {
-      vendor.businessDetails = {
-        licenseNumber: "NA", // Temporary placeholder if missing entirely
-        bankAccount: "NA",
-        ifscCode: "NA"
-      }
-    }
-
-    // Update individual fields to prevent overwriting other business details
-    vendor.businessDetails.upiId = upiId || ""
-    vendor.businessDetails.upiName = upiName || ""
-    vendor.businessDetails.upiEnabled = upiEnabled || false
-
-    // Explicitly mark as modified if needed, though usually automatic for objects
+    if (!vendor.businessDetails) vendor.businessDetails = { licenseNumber: "NA", bankAccount: "NA", ifscCode: "NA" }
+    vendor.businessDetails.upiId = req.body.upiId || ""
+    vendor.businessDetails.upiName = req.body.upiName || ""
+    vendor.businessDetails.upiEnabled = req.body.upiEnabled || false
     vendor.markModified('businessDetails')
-
     await vendor.save()
-
-    res.status(200).json({
-      success: true,
-      message: "Payment settings updated successfully",
-      settings: {
-        upiId: vendor.businessDetails.upiId,
-        upiName: vendor.businessDetails.upiName,
-        upiEnabled: vendor.businessDetails.upiEnabled,
-      },
-    })
+    res.json({ success: true, message: "Settings updated", settings: vendor.businessDetails })
   } catch (error) {
-    console.error("Update payment settings error:", error.message)
-    next(new ErrorHandler(error.message || "Failed to update payment settings", 500))
+    next(new ErrorHandler("Failed to update settings", 500))
   }
 })
 
-// GET VENDOR PROMOTIONS
+// PROMOTIONS
 router.get("/promotions", auth, async (req, res, next) => {
   try {
-    if (!req.user?.isVendor || !req.vendorDetails) {
-      return next(new ErrorHandler("Access denied. Only vendors can access promotions.", 403))
-    }
-
-    res.status(200).json({
-      success: true,
-      promotions: req.vendorDetails.activeOffers || [],
-    })
-  } catch (error) {
-    console.error("Get promotions error:", error)
-    next(new ErrorHandler(error.message || "Failed to fetch promotions", 500))
-  }
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId }).lean()
+    res.json({ success: true, promotions: vendor?.activeOffers || [] })
+  } catch (error) { next(error) }
 })
 
-// CREATE VENDOR PROMOTION
 router.post("/promotions", auth, async (req, res, next) => {
   try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can create promotions.", 403))
-    }
-
-    const { title, description, type, value, minimumOrder, validTill, usageLimit } = req.body
-
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
     const vendor = await Vendor.findOne({ userId: req.user.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found", 404))
-    }
-
-    const newOffer = {
-      title,
-      description,
-      type,
-      value,
-      minimumOrder,
-      validTill: validTill ? new Date(validTill) : null,
-      usageLimit,
-      isActive: true,
-      usedCount: 0
-    }
-
-    if (!vendor.activeOffers) {
-      vendor.activeOffers = []
-    }
-
+    const newOffer = { ...req.body, validTill: req.body.validTill ? new Date(req.body.validTill) : null, isActive: true, usedCount: 0 }
+    if (!vendor.activeOffers) vendor.activeOffers = []
     vendor.activeOffers.push(newOffer)
     await vendor.save()
-
-    res.status(201).json({
-      success: true,
-      message: "Promotion created successfully",
-      promotion: vendor.activeOffers[vendor.activeOffers.length - 1]
-    })
-  } catch (error) {
-    console.error("Create promotion error:", error)
-    next(new ErrorHandler(error.message || "Failed to create promotion", 500))
-  }
+    res.status(201).json({ success: true, message: "Promotion created", promotion: vendor.activeOffers[vendor.activeOffers.length - 1] })
+  } catch (error) { next(error) }
 })
 
-// LIKE VENDOR
-router.put("/:id/like", auth, async (req, res, next) => {
-  try {
-    const vendor = await Vendor.findById(req.params.id)
-    if (!vendor) return next(new ErrorHandler("Vendor not found", 404))
-
-    const userId = req.user.userId
-    const index = vendor.likedBy.indexOf(userId)
-
-    if (index === -1) {
-      vendor.likedBy.push(userId)
-      vendor.analytics.likes = (vendor.analytics.likes || 0) + 1
-    } else {
-      vendor.likedBy.splice(index, 1)
-      vendor.analytics.likes = Math.max(0, (vendor.analytics.likes || 0) - 1)
-    }
-
-    await vendor.save()
-    res.json({ success: true, likes: vendor.analytics.likes, isLiked: index === -1 })
-  } catch (error) {
-    next(new ErrorHandler("Failed to like vendor", 500))
-  }
-})
-
-// SHARE VENDOR
-router.put("/:id/share", async (req, res, next) => {
-  try {
-    const vendor = await Vendor.findById(req.params.id)
-    if (!vendor) return next(new ErrorHandler("Vendor not found", 404))
-
-    vendor.analytics.shares = (vendor.analytics.shares || 0) + 1
-    await vendor.save()
-    res.json({ success: true, shares: vendor.analytics.shares })
-  } catch (error) {
-    next(new ErrorHandler("Failed to update share count", 500))
-  }
-})
-
-// DELETE VENDOR PROMOTION
 router.delete("/promotions/:id", auth, async (req, res, next) => {
   try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can delete promotions.", 403))
-    }
-
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
     const vendor = await Vendor.findOne({ userId: req.user.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found", 404))
-    }
-
-    vendor.activeOffers = vendor.activeOffers.filter(
-      offer => offer._id.toString() !== req.params.id
-    )
-
+    vendor.activeOffers = (vendor.activeOffers || []).filter(o => o._id.toString() !== req.params.id)
     await vendor.save()
-
-    res.status(200).json({
-      success: true,
-      message: "Promotion deleted successfully"
-    })
-  } catch (error) {
-    console.error("Delete promotion error:", error)
-    next(new ErrorHandler(error.message || "Failed to delete promotion", 500))
-  }
+    res.json({ success: true, message: "Promotion deleted" })
+  } catch (error) { next(error) }
 })
 
+// INDIVIDUAL VENDOR (Public)
 router.get("/:id", async (req, res, next) => {
   try {
     const vendor = await Vendor.findById(req.params.id).populate("userId", "name email phone")
-
-    if (!vendor || vendor.status !== "approved") {
-      return next(new ErrorHandler("Vendor not found or not approved.", 404))
-    }
-
+    if (!vendor || vendor.status !== "approved") return next(new ErrorHandler("Vendor not found", 404))
     res.json({
       success: true,
       vendor: {
@@ -584,737 +326,110 @@ router.get("/:id", async (req, res, next) => {
         address: vendor.address,
         rating: vendor.rating,
         deliveryRadius: vendor.deliveryRadius,
-        operationalHours: vendor.operationalHours,
-        images: {
-          shop: vendor.images?.shop || null,
-          gallery: vendor.images?.gallery || [],
-        },
+        images: vendor.images,
         isActive: vendor.isActive,
-        menu: vendor.menu.filter((item) => item.isAvailable),
-        totalOrders: vendor.totalOrders,
+        menu: (vendor.menu || []).filter(i => i.isAvailable),
+        totalOrders: vendor.stats?.totalOrders || 0,
         activeOffers: vendor.activeOffers || [],
         contact: vendor.contact,
-        analytics: vendor.analytics,
-        // Include UPI payment info if enabled (for customer checkout)
-        upiPayment: vendor.upiEnabled ? {
-          enabled: true,
-          upiId: vendor.upiId,
-          upiName: vendor.upiName,
-        } : {
-          enabled: false,
-        },
-      },
+        upiPayment: vendor.upiEnabled ? { enabled: true, upiId: vendor.upiId, upiName: vendor.upiName } : { enabled: false }
+      }
     })
   } catch (error) {
-    console.error("Get vendor error:", error)
-    if (error.name === "CastError") {
-      return next(new ErrorHandler("Invalid Vendor ID format.", 400))
-    }
-    next(new ErrorHandler("Failed to  a fetch vendor", 500))
+    if (error.name === "CastError") return next(new ErrorHandler("Invalid ID", 400))
+    next(error)
   }
 })
 
-// GET VENDOR DASHBOARD
-router.get("/dashboard/stats", auth, async (req, res, next) => {
+// PROFILE UPDATE
+router.put("/profile", auth, upload.fields([{ name: "shopImage", maxCount: 1 }, { name: "gallery", maxCount: 10 }, { name: "licenseImage", maxCount: 1 }]), async (req, res, next) => {
   try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) return next(new ErrorHandler("Profile not found", 404))
+
+    if (req.files?.shopImage?.[0]) vendor.images.shop = (await cloudinary.uploader.upload(req.files.shopImage[0].path, { folder: "street-eats" })).secure_url
+    if (req.files?.gallery) {
+      const results = await Promise.all(req.files.gallery.map(f => cloudinary.uploader.upload(f.path, { folder: "street-eats" })))
+      vendor.images.gallery = [...(vendor.images.gallery || []), ...results.map(r => r.secure_url)]
     }
 
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not available", 404))
-    }
+    const updateData = req.body
+    if (updateData.cuisine) vendor.cuisine = typeof updateData.cuisine === 'string' ? updateData.cuisine.split(',').map(c => c.trim()) : updateData.cuisine
 
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const tomorrow = new Date(today)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-
-    let todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, averageRatingResult, topDishes
-
-    try {
-      [todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, averageRatingResult, topDishes] =
-        await Promise.all([
-          Order.find({
-            vendorId: vendor._id,
-            createdAt: { $gte: today, $lt: tomorrow },
-            status: { $ne: "cancelled" }
-          }).lean(),
-
-          Order.find({
-            vendorId: vendor._id,
-            status: { $in: ["placed", "accepted", "preparing"] }
-          }).populate("customerId", "name phone email").lean(),
-
-          Order.find({
-            vendorId: vendor._id,
-            createdAt: { $gte: sevenDaysAgo },
-            status: "delivered"
-          }).lean(),
-
-          Review.find({ vendorId: vendor._id })
-            .sort({ createdAt: -1 })
-            .limit(5)
-            .populate("customerId", "name")
-            .lean(),
-
-          Review.countDocuments({ vendorId: vendor._id }),
-
-          Review.aggregate([
-            { $match: { vendorId: vendor._id } },
-            { $group: { _id: null, avgRating: { $avg: "$overall" } } }
-          ]),
-
-          Order.aggregate([
-            {
-              $match: {
-                vendorId: vendor._id,
-                createdAt: { $gte: sevenDaysAgo },
-                status: "delivered"
-              }
-            },
-            { $unwind: "$items" },
-            {
-              $group: {
-                _id: "$items.menuItemId",
-                name: { $first: "$items.name" },
-                orders: { $sum: "$items.quantity" },
-                revenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } },
-              }
-            },
-            { $sort: { revenue: -1 } },
-            { $limit: 5 }
-          ])
-        ])
-    } catch (queryError) {
-      console.error("Dashboard queries failed:", queryError)
-      return next(new ErrorHandler("Failed to load dashboard data", 500))
-    }
-
-    const todayRevenue = todayOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0
-    const todayOrderCount = todayOrders?.length || 0
-    const avgOrderValue = todayOrderCount > 0 ? todayRevenue / todayOrderCount : 0
-
-    const weeklyRevenue = weeklyOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0
-    const weeklyOrderCount = weeklyOrders?.length || 0
-
-    let averageRating = 0
-    try {
-      averageRating = averageRatingResult?.length > 0
-        ? Number.parseFloat(averageRatingResult[0].avgRating?.toFixed(1) || 0)
-        : 0
-    } catch (ratingError) {
-      console.error("Rating calculation failed:", ratingError)
-      averageRating = 0
-    }
-
-    let growthPercentage = 0
-    try {
-      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-      const lastWeekOrders = await Order.find({
-        vendorId: vendor._id,
-        createdAt: { $gte: fourteenDaysAgo, $lt: sevenDaysAgo },
-        status: "delivered"
-      }).lean()
-
-      const lastWeekRevenue = lastWeekOrders?.reduce((sum, order) => sum + (order?.pricing?.total || 0), 0) || 0
-
-      if (lastWeekRevenue > 0) {
-        growthPercentage = ((weeklyRevenue - lastWeekRevenue) / lastWeekRevenue) * 100
-      } else if (weeklyRevenue > 0) {
-        growthPercentage = 100
-      }
-    } catch (growthError) {
-      console.error("Growth calculation failed:", growthError)
-      growthPercentage = 0
-    }
-
-    const response = {
-      success: true,
-      vendor: {
-        id: vendor._id,
-        shopName: vendor.shopName || "",
-        rating: vendor.rating || {},
-        stats: vendor.stats || {},
-        menu: vendor.menu || []
-      },
-      todayStats: {
-        orders: todayOrderCount,
-        revenue: todayRevenue,
-        avgOrderValue,
-        cancelledOrders: todayOrders?.filter(o => o?.status === "cancelled").length || 0
-      },
-      weeklyStats: {
-        revenue: weeklyRevenue,
-        orders: weeklyOrderCount,
-        growth: parseFloat(growthPercentage.toFixed(2))
-      },
-      customerFeedback: {
-        averageRating,
-        totalReviews: totalReviews || 0,
-        recentReviews: (vendorReviews || []).map(review => ({
-          customer: review?.customerId?.name || "Anonymous",
-          rating: review?.overall || 0,
-          comment: review?.review || ""
-        }))
-      },
-      pendingOrders: (pendingOrders || []).map(order => ({
-        id: order?._id || "",
-        customerName: order?.customerId?.name || "N/A",
-        customerPhone: order?.customerId?.phone || "N/A",
-        items: (order?.items || []).map(item => ({
-          name: item?.name || "",
-          quantity: item?.quantity || 0,
-          price: item?.price || 0
-        })),
-        total: order?.pricing?.total || 0
-      }))
-    }
-
-    res.json(response)
-
-  } catch (error) {
-    console.error("Vendor dashboard error:", error)
-    next(new ErrorHandler("Failed to fetch vendor dashboard data", 500))
-  }
-})
-
-// UPDATE VENDOR PROFILE
-router.put(
-  "/profile",
-  auth,
-  upload.fields([
-    { name: "shopImage", maxCount: 1 },
-    { name: "gallery", maxCount: 10 },
-    { name: "licenseImage", maxCount: 1 }
-  ]),
-  async (req, res, next) => {
-    try {
-      if (!req.user?.isVendor) {
-        return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
-      }
-
-      const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-      if (!vendor) {
-        return next(new ErrorHandler("Vendor profile not found", 404))
-      }
-
-      // Handle Cloudinary uploads
-      if (req.files?.shopImage?.[0]) {
-        const result = await cloudinary.uploader.upload(req.files.shopImage[0].path, {
-          folder: "street-eats",
-          resource_type: "auto"
-        })
-        vendor.images.shop = result.secure_url // Store Cloudinary URL
-        // Delete local file
-        fs.unlinkSync(req.files.shopImage[0].path)
-      }
-
-      if (req.files?.gallery) {
-        const uploadPromises = req.files.gallery.map(file =>
-          cloudinary.uploader.upload(file.path, {
-            folder: "street-eats",
-            resource_type: "auto"
-          })
-        )
-        const results = await Promise.all(uploadPromises)
-        const newGalleryUrls = results.map(result => result.secure_url) // Cloudinary URLs
-        vendor.images.gallery = [...(vendor.images.gallery || []), ...newGalleryUrls]
-        // Delete local files
-        req.files.gallery.forEach(file => fs.unlinkSync(file.path))
-      }
-
-      if (req.files?.licenseImage?.[0]) {
-        const result = await cloudinary.uploader.upload(req.files.licenseImage[0].path, {
-          folder: "street-eats",
-          resource_type: "auto"
-        })
-        vendor.images.license = result.secure_url // Store Cloudinary URL
-        // Delete local file
-        fs.unlinkSync(req.files.licenseImage[0].path)
-      }
-
-      const updateData = req.body
-
-      if (updateData.cuisine) {
-        vendor.cuisine = typeof updateData.cuisine === 'string'
-          ? updateData.cuisine.split(',').map(c => c.trim())
-          : updateData.cuisine
-      }
-
-      if (updateData.operationalHours) {
-        try {
-          vendor.operationalHours = typeof updateData.operationalHours === 'string'
-            ? JSON.parse(updateData.operationalHours)
-            : updateData.operationalHours
-        } catch (e) {
-          console.warn("Invalid operationalHours format:", e)
-          return next(new ErrorHandler("Invalid operational hours format", 400))
-        }
-      }
-
-      for (const [key, value] of Object.entries(updateData)) {
-        if (value === undefined || value === null) continue
-
-        if (['cuisine', 'operationalHours'].includes(key)) continue
-
-        if (key.includes('.')) {
-          const keys = key.split('.')
-          let target = vendor
-          for (let i = 0; i < keys.length - 1; i++) {
-            if (!target[keys[i]]) target[keys[i]] = {}
-            target = target[keys[i]]
-          }
-          target[keys[keys.length - 1]] = value
-        } else {
-          vendor[key] = value
-        }
-      }
-
-      const updatedVendor = await vendor.save()
-
-      res.json({
-        success: true,
-        message: "Profile updated successfully",
-        vendor: {
-          ...updatedVendor.toObject(),
-          images: {
-            shop: updatedVendor.images.shop,
-            gallery: updatedVendor.images.gallery || [],
-            license: updatedVendor.images.license
-          }
-        }
-      })
-
-    } catch (error) {
-      console.error("Update vendor profile error:", error)
-
-      // Clean up files on error
-      if (req.files) {
-        Object.values(req.files).flat().forEach(file => {
-          if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path)
-          }
-        })
-      }
-
-      if (error.name === "ValidationError") {
-        const messages = Object.values(error.errors).map(val => val.message)
-        return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
-      }
-
-      next(new ErrorHandler(error.message || "Failed to update profile", 500))
-    }
-  }
-)
-
-// ADD MENU ITEM - FIXED VERSION
-// ADD MENU ITEM - WITH DEBUGGING
-router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) => {
-  try {
-    console.log("📁 File received:", req.file) // ✅ Debug log
-    console.log("📦 Body data:", req.body) // ✅ Debug log
-
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not available", 404))
-    }
-
-    const {
-      name, description, price, category, isVeg, isVegan, isGlutenFree,
-      spiceLevel, preparationTime, stock, lowStockThreshold,
-      isPopular, isFeatured, isAvailable
-    } = req.body
-
-    if (!name || !price || !category) {
-      return next(new ErrorHandler("Menu item name, price, and category are required.", 400))
-    }
-
-    let imageUrl = ""
-    if (req.file) {
-      console.log("🔄 Uploading to Cloudinary...")
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "street-eats",
-        resource_type: "auto"
-      })
-      imageUrl = result.secure_url
-      console.log("✅ Cloudinary URL:", imageUrl)
-      fs.unlinkSync(req.file.path)
-    }
-
-    // Helper to parse JSON fields safely
-    const parseJSON = (field) => {
-      try {
-        if (typeof field === 'string') return JSON.parse(field)
-        return field
-      } catch (e) {
-        return field
-      }
-    }
-
-    const menuItem = {
-      name,
-      description: description || "",
-      price: Number.parseFloat(price),
-      category,
-      isVeg: isVeg === "true" || isVeg === true,
-      isVegan: isVegan === "true" || isVegan === true,
-      isGlutenFree: isGlutenFree === "true" || isGlutenFree === true,
-      spiceLevel: spiceLevel || "medium",
-      preparationTime: preparationTime ? Number.parseInt(preparationTime) : undefined,
-      stock: stock ? Number.parseInt(stock) : undefined,
-      lowStockThreshold: lowStockThreshold ? Number.parseInt(lowStockThreshold) : undefined,
-      isPopular: isPopular === "true" || isPopular === true,
-      isFeatured: isFeatured === "true" || isFeatured === true,
-      isAvailable: isAvailable !== undefined ? (isAvailable === "true" || isAvailable === true) : true,
-      image: imageUrl,
-
-      // Complex fields (arrays/objects)
-      ingredients: parseJSON(req.body.ingredients) || [],
-      allergens: parseJSON(req.body.allergens) || [],
-      tags: parseJSON(req.body.tags) || [],
-      customizations: parseJSON(req.body.customizations) || [],
-      nutritionalInfo: parseJSON(req.body.nutritionalInfo) || {},
-    }
-
-    console.log("💾 Saving menu item:", menuItem) // ✅ Debug log
-
-    vendor.menu.push(menuItem)
-    await vendor.save()
-
-    res.status(201).json({
-      success: true,
-      message: "Menu item added successfully",
-      menuItem: vendor.menu[vendor.menu.length - 1],
+    Object.entries(updateData).forEach(([key, value]) => {
+      if (['cuisine', 'images'].includes(key)) return
+      if (key.includes('.')) {
+        const keys = key.split('.')
+        let t = vendor
+        for (let i = 0; i < keys.length - 1; i++) { t[keys[i]] = t[keys[i]] || {}; t = t[keys[i]] }
+        t[keys[keys.length - 1]] = value
+      } else { vendor[key] = value }
     })
-  } catch (error) {
-    console.error("Add menu item error:", error)
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path)
-    }
-    next(new ErrorHandler("Failed to add menu item", 500))
-  }
-})
-// UPDATE MENU ITEM
-// UPDATE MENU ITEM - FIXED VERSION
-router.put("/menu/:itemId", auth, upload.single("itemImage"), async (req, res, next) => {
-  try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not available", 404))
-    }
-
-    const menuItem = vendor.menu.id(req.params.itemId)
-    if (!menuItem) {
-      return next(new ErrorHandler("Menu item not found.", 404))
-    }
-
-    // ✅ FIX: Upload to Cloudinary if new file exists
-    if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "street-eats",
-        resource_type: "auto"
-      })
-      menuItem.image = result.secure_url // ✅ Store Cloudinary URL
-      // Delete local file
-      fs.unlinkSync(req.file.path)
-    }
-
-    // Update basic fields
-    // Helper to parse JSON fields safely
-    const parseJSON = (field) => {
-      try {
-        if (typeof field === 'string') return JSON.parse(field)
-        return field
-      } catch (e) {
-        return field
-      }
-    }
-
-    // Update fields
-    const fieldsToUpdate = [
-      "name", "category", "description", "spiceLevel",
-      "preparationTime", "stock", "lowStockThreshold"
-    ]
-
-    fieldsToUpdate.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        menuItem[field] = req.body[field]
-      }
-    })
-
-    // Numeric conversions
-    if (req.body.price) {
-      const parsedPrice = parseFloat(req.body.price)
-      if (!isNaN(parsedPrice)) menuItem.price = parsedPrice
-    }
-    if (req.body.preparationTime) menuItem.preparationTime = parseInt(req.body.preparationTime)
-    if (req.body.stock) menuItem.stock = parseInt(req.body.stock)
-    if (req.body.lowStockThreshold) menuItem.lowStockThreshold = parseInt(req.body.lowStockThreshold)
-
-    // Boolean conversions
-    const boolFields = ["isVeg", "isVegan", "isGlutenFree", "isAvailable", "isPopular", "isFeatured"]
-    boolFields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        menuItem[field] = req.body[field] === "true" || req.body[field] === true
-      }
-    })
-
-    // Complex fields (JSON parsing)
-    if (req.body.customizations) menuItem.customizations = parseJSON(req.body.customizations) || []
-    if (req.body.ingredients) menuItem.ingredients = parseJSON(req.body.ingredients) || []
-    if (req.body.allergens) menuItem.allergens = parseJSON(req.body.allergens) || []
-    if (req.body.tags) menuItem.tags = parseJSON(req.body.tags) || []
-    if (req.body.nutritionalInfo) menuItem.nutritionalInfo = parseJSON(req.body.nutritionalInfo) || {}
 
     await vendor.save()
-
-    res.json({
-      success: true,
-      message: "Menu item updated successfully",
-      menuItem,
-    })
-  } catch (error) {
-    console.error("Update menu item error:", error)
-    // Clean up file on error
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path)
-    }
-    if (error.name === "CastError") {
-      return next(new ErrorHandler("Invalid Menu Item ID format.", 400))
-    }
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((val) => val.message)
-      return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
-    }
-    next(new ErrorHandler("Failed to update menu item", 500))
-  }
-})
-// DELETE MENU ITEM
-router.delete("/menu/:itemId", auth, async (req, res, next) => {
-  try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can access this dashboard.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not available", 404))
-    }
-
-    const itemId = req.params.itemId
-    const menuItemExists = vendor.menu.id(itemId)
-    if (!menuItemExists) {
-      return res.status(404).json({ success: false, message: "Menu item not found" })
-    }
-
-    vendor.menu.pull({ _id: itemId })
-    await vendor.save()
-
-    return res.status(200).json({ success: true, message: "Menu item deleted successfully" })
-  } catch (error) {
-    console.error("Delete menu item error:", error)
-    if (error.name === "CastError") {
-      return next(new ErrorHandler("Invalid Menu Item ID format.", 400))
-    }
-    next(new ErrorHandler("Failed to delete menu item", 500))
-  }
+    res.json({ success: true, message: "Profile updated", vendor })
+  } catch (error) { next(error) }
 })
 
-// TOGGLE VENDOR ACTIVE STATUS
+// TOGGLE STATUS
 router.put("/toggle-status", auth, async (req, res, next) => {
   try {
-    if (req.user.role !== "vendor") {
-      return next(new ErrorHandler("Access denied. Only vendors can toggle their status.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found for this user.", 404))
-    }
-
+    if (req.user.role !== "vendor") return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
     vendor.isActive = !vendor.isActive
     await vendor.save()
-
-    const io = req.app.get("io")
-    if (io) {
-      io.emit("vendor-status-changed", {
-        vendorId: vendor._id,
-        isActive: vendor.isActive,
-      })
-    }
-
-    res.json({
-      success: true,
-      message: `Vendor ${vendor.isActive ? "activated" : "deactivated"} successfully`,
-      isActive: vendor.isActive,
-    })
-  } catch (error) {
-    console.error("Toggle vendor status error:", error)
-    next(new ErrorHandler("Failed to toggle vendor status", 500))
-  }
+    res.json({ success: true, isActive: vendor.isActive })
+  } catch (error) { next(error) }
 })
 
-// GET VENDOR PAYMENT SETTINGS
-router.get("/payment-settings", auth, async (req, res, next) => {
+// MENU MGMT
+router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) => {
   try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can view payment settings.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found.", 404))
-    }
-
-    res.json({
-      success: true,
-      settings: {
-        upiId: vendor.upiId,
-        upiName: vendor.upiName,
-        upiEnabled: vendor.upiEnabled,
-      },
-    })
-  } catch (error) {
-    console.error("Get vendor payment settings error:", error)
-    next(new ErrorHandler("Failed to fetch vendor payment settings", 500))
-  }
-})
-
-// UPDATE VENDOR PAYMENT SETTINGS
-router.post("/payment-settings", auth, async (req, res, next) => {
-  try {
-    if (!req.user?.isVendor) {
-      return next(new ErrorHandler("Access denied. Only vendors can update payment settings.", 403))
-    }
-
-    const vendor = await Vendor.findOne({ userId: req.vendorDetails.userId })
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor profile not found.", 404))
-    }
-
-    const { upiId, upiName, upiEnabled } = req.body
-
-    // Basic validation
-    if (upiEnabled && (!upiId || !upiName)) {
-      return next(new ErrorHandler("UPI ID and Account Holder Name are required if UPI payments are enabled.", 400))
-    }
-    const upiRegex = /^[a-zA-Z0-9.\-]+@[a-zA-Z0-9.\-]+$/
-    if (upiEnabled && upiId && !upiRegex.test(upiId)) {
-      return next(new ErrorHandler("Invalid UPI ID format.", 400))
-    }
-
-    vendor.upiId = upiId || null
-    vendor.upiName = upiName || null
-    vendor.upiEnabled = upiEnabled // Ensure boolean
-
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    let imageUrl = ""
+    if (req.file) imageUrl = (await cloudinary.uploader.upload(req.file.path, { folder: "street-eats" })).secure_url
+    const item = { ...req.body, price: parseFloat(req.body.price), image: imageUrl, isAvailable: true }
+    vendor.menu.push(item)
     await vendor.save()
-
-    res.json({
-      success: true,
-      message: "UPI payment settings updated successfully",
-      settings: {
-        upiId: vendor.upiId,
-        upiName: vendor.upiName,
-        upiEnabled: vendor.upiEnabled,
-      },
-    })
-  } catch (error) {
-    console.error("Update vendor payment settings error:", error)
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map(val => val.message)
-      return next(new ErrorHandler(`Validation failed: ${messages.join(", ")}`, 400))
-    }
-    next(new ErrorHandler(error.message || "Failed to update UPI payment settings", 500))
-  }
+    res.status(201).json({ success: true, menuItem: vendor.menu[vendor.menu.length - 1] })
+  } catch (error) { next(error) }
 })
 
-// LIKE/UNLIKE VENDOR
-router.post("/:id/like", auth, async (req, res, next) => {
+router.put("/menu/:itemId", auth, upload.single("itemImage"), async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    const item = vendor.menu.id(req.params.itemId)
+    if (req.file) item.image = (await cloudinary.uploader.upload(req.file.path, { folder: "street-eats" })).secure_url
+    Object.assign(item, req.body)
+    await vendor.save()
+    res.json({ success: true, menuItem: item })
+  } catch (error) { next(error) }
+})
+
+router.delete("/menu/:itemId", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    vendor.menu.pull(req.params.itemId)
+    await vendor.save()
+    res.json({ success: true, message: "Deleted" })
+  } catch (error) { next(error) }
+})
+
+// SOCIAL
+router.put("/:id/like", auth, async (req, res, next) => {
   try {
     const vendor = await Vendor.findById(req.params.id)
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor not found.", 404))
-    }
-
     const userId = req.user.userId
-    const isLiked = vendor.likedBy?.some(id => id.toString() === userId.toString())
-
-    if (isLiked) {
-      // Unlike
-      vendor.likedBy = vendor.likedBy.filter(id => id.toString() !== userId.toString())
-      vendor.analytics.likes = Math.max(0, (vendor.analytics.likes || 0) - 1)
-    } else {
-      // Like
-      if (!vendor.likedBy) vendor.likedBy = []
-      vendor.likedBy.push(userId)
-      vendor.analytics.likes = (vendor.analytics.likes || 0) + 1
-    }
-
+    const idx = vendor.likedBy.indexOf(userId)
+    if (idx === -1) { vendor.likedBy.push(userId); vendor.analytics.likes = (vendor.analytics.likes || 0) + 1 }
+    else { vendor.likedBy.splice(idx, 1); vendor.analytics.likes = Math.max(0, (vendor.analytics.likes || 0) - 1) }
     await vendor.save()
-
-    res.json({
-      success: true,
-      isLiked: !isLiked,
-      likesCount: vendor.analytics.likes,
-    })
-  } catch (error) {
-    console.error("Like vendor error:", error)
-    next(new ErrorHandler("Failed to like/unlike vendor", 500))
-  }
-})
-
-// SHARE VENDOR (increment share count)
-router.post("/:id/share", async (req, res, next) => {
-  try {
-    const vendor = await Vendor.findById(req.params.id)
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor not found.", 404))
-    }
-
-    vendor.analytics.shares = (vendor.analytics.shares || 0) + 1
-    await vendor.save()
-
-    res.json({
-      success: true,
-      sharesCount: vendor.analytics.shares,
-    })
-  } catch (error) {
-    console.error("Share vendor error:", error)
-    next(new ErrorHandler("Failed to record share", 500))
-  }
-})
-
-// CHECK IF USER LIKED VENDOR
-router.get("/:id/like-status", auth, async (req, res, next) => {
-  try {
-    const vendor = await Vendor.findById(req.params.id)
-    if (!vendor) {
-      return next(new ErrorHandler("Vendor not found.", 404))
-    }
-
-    const userId = req.user.userId
-    const isLiked = vendor.likedBy?.some(id => id.toString() === userId.toString()) || false
-
-    res.json({
-      success: true,
-      isLiked,
-      likesCount: vendor.analytics.likes || 0,
-    })
-  } catch (error) {
-    console.error("Get like status error:", error)
-    next(new ErrorHandler("Failed to get like status", 500))
-  }
+    res.json({ success: true, likes: vendor.analytics.likes, isLiked: idx === -1 })
+  } catch (error) { next(error) }
 })
 
 module.exports = router

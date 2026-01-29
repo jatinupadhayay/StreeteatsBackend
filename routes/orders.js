@@ -95,7 +95,11 @@ router.post("/", auth, async (req, res) => {
     console.log(order)
 
     // Update vendor stats
-    vendor.totalOrders += 1
+    if (vendor.stats) {
+      vendor.stats.totalOrders += 1
+    } else {
+      vendor.stats = { totalOrders: 1 }
+    }
     await vendor.save()
 
     // Send real-time notification to vendor
@@ -322,12 +326,10 @@ router.put("/:orderId/status", auth, async (req, res) => {
       order.actualDeliveryTime = new Date()
 
       // We need to fetch vendor again or use the populated one safely
-      // Since order.vendorId is populated, we can treat it as a document if we are careful, 
-      // but save() might not work on a populated field sub-document directly depending on mongoose version.
-      // Better to findById update to be safe and separate.
-      if (order.vendorId && order.vendorId._id) {
-        await Vendor.findByIdAndUpdate(order.vendorId._id, {
-          $inc: { totalRevenue: order.pricing.total }
+      if (order.vendorId) {
+        const vId = order.vendorId._id || order.vendorId;
+        await Vendor.findByIdAndUpdate(vId, {
+          $inc: { "stats.totalRevenue": order.pricing.total }
         });
       }
 
@@ -351,18 +353,20 @@ router.put("/:orderId/status", auth, async (req, res) => {
         customer: order.customerId,
       }
 
-      const vendorIdString = order.vendorId._id.toString();
+      const vendorIdString = order.vendorId?._id ? order.vendorId._id.toString() : order.vendorId.toString();
 
       // ✅ Emit vendor-side update
-      console.log("📤 Emitting 'order-status-updated' to", `vendor-${vendorIdString}`)
+      if (order.vendorId) {
+        console.log("📤 Emitting 'order-status-updated' to", `vendor-${vendorIdString}`)
 
-      // When updating order status
-      io.to(`vendor-${vendorIdString}`).emit("order-status-updated", {
-        orderId: order._id,
-        status: order.status,
-        message: getStatusMessage(status, order.orderType),
-        order: enrichedOrder,
-      });
+        // When updating order status
+        io.to(`vendor-${vendorIdString}`).emit("order-status-updated", {
+          orderId: order._id,
+          status: order.status,
+          message: getStatusMessage(status, order.orderType),
+          order: enrichedOrder,
+        });
+      }
 
       // ✅ Emit customer-side update
       if (order.customerId && order.customerId._id) {
