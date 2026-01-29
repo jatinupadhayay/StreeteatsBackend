@@ -204,7 +204,7 @@ router.get("/trending/dishes", async (req, res, next) => {
   }
 })
 
-// GET VENDOR DASHBOARD (Fresh direct fetch)
+// GET VENDOR DASHBOARD
 router.get("/dashboard/stats", auth, async (req, res, next) => {
   try {
     if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
@@ -213,28 +213,71 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
 
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
 
-    const [todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, avgRatingResult] = await Promise.all([
-      Order.find({ vendorId: vendor._id, createdAt: { $gte: today }, status: { $ne: "cancelled" } }).lean(),
+    const [todayOrders, pendingOrders, weeklyOrders, vendorReviews, totalReviews, avgRatingResult, topDishes] = await Promise.all([
+      Order.find({ vendorId: vendor._id, createdAt: { $gte: today, $lt: tomorrow }, status: { $ne: "cancelled" } }).lean(),
       Order.find({ vendorId: vendor._id, status: { $in: ["placed", "accepted", "preparing"] } }).populate("customerId", "name phone").lean(),
       Order.find({ vendorId: vendor._id, createdAt: { $gte: sevenDaysAgo }, status: "delivered" }).lean(),
       Review.find({ vendorId: vendor._id }).sort({ createdAt: -1 }).limit(5).populate("customerId", "name").lean(),
       Review.countDocuments({ vendorId: vendor._id }),
-      Review.aggregate([{ $match: { vendorId: vendor._id } }, { $group: { _id: null, avg: { $avg: "$ratings.food.overall" } } }])
+      Review.aggregate([{ $match: { vendorId: vendor._id } }, { $group: { _id: null, avg: { $avg: "$ratings.food.overall" } } }]),
+      Order.aggregate([
+        { $match: { vendorId: vendor._id, createdAt: { $gte: sevenDaysAgo }, status: "delivered" } },
+        { $unwind: "$items" },
+        {
+          $group: {
+            _id: "$items.menuItemId",
+            name: { $first: "$items.name" },
+            orders: { $sum: "$items.quantity" },
+            revenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } },
+          }
+        },
+        { $sort: { revenue: -1 } },
+        { $limit: 5 }
+      ])
     ])
 
+    // Calculate growth
+    let growth = 0
+    try {
+      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+      const lastWeekOrders = await Order.find({ vendorId: vendor._id, createdAt: { $gte: fourteenDaysAgo, $lt: sevenDaysAgo }, status: "delivered" }).lean()
+      const thisWeekRev = weeklyOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+      const lastWeekRev = lastWeekOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+      if (lastWeekRev > 0) growth = ((thisWeekRev - lastWeekRev) / lastWeekRev) * 100
+      else if (thisWeekRev > 0) growth = 100
+    } catch (e) { console.error("Growth fail:", e) }
+
     const todayRevenue = (todayOrders || []).reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
-    const weeklyRevenue = (weeklyOrders || []).reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+    const todayCount = (todayOrders || []).length
+    const avgOrderValue = todayCount > 0 ? todayRevenue / todayCount : 0
     const averageRating = (avgRatingResult && avgRatingResult.length > 0 && avgRatingResult[0].avg)
       ? parseFloat(avgRatingResult[0].avg.toFixed(1))
       : 0
 
     res.json({
       success: true,
-      vendor: { id: vendor._id, shopName: vendor.shopName, stats: vendor.stats || {} },
-      todayStats: { orders: (todayOrders || []).length, revenue: todayRevenue },
-      weeklyStats: { orders: (weeklyOrders || []).length, revenue: weeklyRevenue },
+      vendor: {
+        id: vendor._id,
+        shopName: vendor.shopName,
+        stats: vendor.stats || {},
+        menu: vendor.menu || []
+      },
+      todayStats: {
+        orders: todayCount,
+        revenue: todayRevenue,
+        avgOrderValue,
+        cancelledOrders: (todayOrders || []).filter(o => o.status === "cancelled").length
+      },
+      weeklyStats: {
+        orders: (weeklyOrders || []).length,
+        revenue: weeklyOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0),
+        growth: parseFloat(growth.toFixed(2))
+      },
+      topDishes: topDishes || [],
       customerFeedback: {
         averageRating,
         totalReviews: totalReviews || 0,
@@ -246,12 +289,18 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
       },
       pendingOrders: (pendingOrders || []).map(o => ({
         id: o._id,
+        orderId: o.orderNumber || o._id,
         customerName: o.customerId?.name || "N/A",
+        customerPhone: o.customerId?.phone || "N/A",
         items: o.items || [],
-        total: o.pricing?.total || 0
+        total: o.pricing?.total || 0,
+        status: o.status,
+        orderTime: o.createdAt,
+        deliveryAddress: (typeof o.deliveryAddress === 'string') ? o.deliveryAddress : (o.deliveryAddress?.street || "N/A")
       }))
     })
   } catch (error) {
+    console.error("Dashboard error:", error)
     next(new ErrorHandler("Failed to load dashboard", 500))
   }
 })
