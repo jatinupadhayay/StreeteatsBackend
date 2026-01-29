@@ -592,6 +592,9 @@ router.get("/:id", async (req, res, next) => {
         isActive: vendor.isActive,
         menu: vendor.menu.filter((item) => item.isAvailable),
         totalOrders: vendor.totalOrders,
+        activeOffers: vendor.activeOffers || [],
+        contact: vendor.contact,
+        analytics: vendor.analytics,
         // Include UPI payment info if enabled (for customer checkout)
         upiPayment: vendor.upiEnabled ? {
           enabled: true,
