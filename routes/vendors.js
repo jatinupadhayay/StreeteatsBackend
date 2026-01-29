@@ -221,20 +221,35 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
       Order.find({ vendorId: vendor._id, createdAt: { $gte: sevenDaysAgo }, status: "delivered" }).lean(),
       Review.find({ vendorId: vendor._id }).sort({ createdAt: -1 }).limit(5).populate("customerId", "name").lean(),
       Review.countDocuments({ vendorId: vendor._id }),
-      Review.aggregate([{ $match: { vendorId: vendor._id } }, { $group: { _id: null, avg: { $avg: "$overall" } } }])
+      Review.aggregate([{ $match: { vendorId: vendor._id } }, { $group: { _id: null, avg: { $avg: "$ratings.food.overall" } } }])
     ])
 
-    const todayRevenue = todayOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
-    const weeklyRevenue = weeklyOrders.reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
-    const averageRating = avgRatingResult.length > 0 ? parseFloat(avgRatingResult[0].avg.toFixed(1)) : 0
+    const todayRevenue = (todayOrders || []).reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+    const weeklyRevenue = (weeklyOrders || []).reduce((sum, o) => sum + (o.pricing?.total || 0), 0)
+    const averageRating = (avgRatingResult && avgRatingResult.length > 0 && avgRatingResult[0].avg)
+      ? parseFloat(avgRatingResult[0].avg.toFixed(1))
+      : 0
 
     res.json({
       success: true,
       vendor: { id: vendor._id, shopName: vendor.shopName, stats: vendor.stats || {} },
-      todayStats: { orders: todayOrders.length, revenue: todayRevenue },
-      weeklyStats: { orders: weeklyOrders.length, revenue: weeklyRevenue },
-      customerFeedback: { averageRating, totalReviews, recentReviews: vendorReviews.map(r => ({ customer: r.customerId?.name || "Anonymous", rating: r.overall, comment: r.review })) },
-      pendingOrders: pendingOrders.map(o => ({ id: o._id, customerName: o.customerId?.name || "N/A", items: o.items, total: o.pricing?.total }))
+      todayStats: { orders: (todayOrders || []).length, revenue: todayRevenue },
+      weeklyStats: { orders: (weeklyOrders || []).length, revenue: weeklyRevenue },
+      customerFeedback: {
+        averageRating,
+        totalReviews: totalReviews || 0,
+        recentReviews: (vendorReviews || []).map(r => ({
+          customer: r.customerId?.name || "Anonymous",
+          rating: r.ratings?.food?.overall || 0,
+          comment: r.comments?.overall || ""
+        }))
+      },
+      pendingOrders: (pendingOrders || []).map(o => ({
+        id: o._id,
+        customerName: o.customerId?.name || "N/A",
+        items: o.items || [],
+        total: o.pricing?.total || 0
+      }))
     })
   } catch (error) {
     next(new ErrorHandler("Failed to load dashboard", 500))

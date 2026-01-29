@@ -353,10 +353,9 @@ router.put("/:orderId/status", auth, async (req, res) => {
         customer: order.customerId,
       }
 
-      const vendorIdString = order.vendorId?._id ? order.vendorId._id.toString() : order.vendorId.toString();
-
       // ✅ Emit vendor-side update
       if (order.vendorId) {
+        const vendorIdString = order.vendorId._id ? order.vendorId._id.toString() : order.vendorId.toString();
         console.log("📤 Emitting 'order-status-updated' to", `vendor-${vendorIdString}`)
 
         // When updating order status
@@ -366,6 +365,12 @@ router.put("/:orderId/status", auth, async (req, res) => {
           message: getStatusMessage(status, order.orderType),
           order: enrichedOrder,
         });
+
+        // ✅ Emit order completed event separately
+        if (status === "delivered" || status === "picked_up") {
+          console.log("📤 Emitting 'order-completed' to", `vendor-${vendorIdString}`)
+          io.to(`vendor-${vendorIdString}`).emit("order-completed", enrichedOrder)
+        }
       }
 
       // ✅ Emit customer-side update
@@ -379,28 +384,21 @@ router.put("/:orderId/status", auth, async (req, res) => {
 
       // ✅ Emit delivery-side update
       if (order.deliveryPartnerId) {
-        // Handle if deliveryPartnerId is an ID or object (though we populated it as _id on line 258, wait line 258 says populate("deliveryPartnerId", "_id"))
-        // Actually line 258: .populate("deliveryPartnerId", "_id");
-        // So order.deliveryPartnerId is an object { _id: ... }
         const dpId = order.deliveryPartnerId._id || order.deliveryPartnerId;
         io.to(`delivery-${dpId}`).emit("order-status-updated", {
           orderId: order._id,
           status: order.status,
         })
       }
-
-      // ✅ Emit order completed event separately
-      console.log("📤 Emitting 'order-completed' to", `vendor-${vendorIdString}`)
-      if (status === "delivered" || status === "picked_up") {
-        io.to(`vendor-${vendorIdString}`).emit("order-completed", enrichedOrder)
-      }
     }
 
     // Send email update
-    try {
-      sendOrderStatusEmail(order.customerId.email, order)
-    } catch (emailError) {
-      console.log("Email sending failed:", emailError.message)
+    if (order.customerId && order.customerId.email) {
+      try {
+        sendOrderStatusEmail(order.customerId.email, order)
+      } catch (emailError) {
+        console.log("Email sending failed:", emailError.message)
+      }
     }
 
     res.json({
@@ -546,8 +544,13 @@ router.put("/:orderId/rate", auth, async (req, res) => {
       return res.status(400).json({ message: "Can only rate delivered orders" })
     }
 
-    // Update order rating
-    order.rating = { food, delivery, overall, review }
+    // Update order rating - Match schema structure
+    order.rating = {
+      food: { rating: Number(food || overall) },
+      delivery: { rating: Number(delivery || overall) },
+      overall: { rating: Number(overall), review },
+      ratedAt: new Date()
+    }
     await order.save()
 
     // Create a persistent Review document for the vendor
@@ -558,8 +561,8 @@ router.put("/:orderId/rate", auth, async (req, res) => {
       deliveryPartnerId: order.deliveryPartnerId,
       type: "vendor",
       ratings: {
-        food: { overall: food || overall },
-        delivery: { overall: delivery || overall },
+        food: { overall: Number(food || overall) },
+        delivery: { overall: Number(delivery || overall) },
       },
       comments: {
         overall: review
@@ -571,6 +574,8 @@ router.put("/:orderId/rate", auth, async (req, res) => {
     // Create dish-specific reviews if provided
     if (dishRatings && dishRatings.length > 0) {
       for (const dishRating of dishRatings) {
+        if (!dishRating.menuItemId || !dishRating.rating) continue;
+
         const dishReview = new Review({
           orderId: order._id,
           customerId: req.user.userId,
@@ -578,7 +583,7 @@ router.put("/:orderId/rate", auth, async (req, res) => {
           menuItemId: dishRating.menuItemId,
           type: "dish",
           ratings: {
-            food: { overall: dishRating.rating },
+            food: { overall: Number(dishRating.rating) },
           },
           comments: {
             overall: dishRating.comment
@@ -591,17 +596,25 @@ router.put("/:orderId/rate", auth, async (req, res) => {
 
     // Update vendor rating
     const vendor = await Vendor.findById(order.vendorId)
-    if (vendor) {
-      const newRatingCount = vendor.rating.count + 1
-      const newAverage = (vendor.rating.average * vendor.rating.count + overall) / newRatingCount
+    if (vendor && vendor.rating) {
+      const ratingVal = Number(overall);
+      const currentCount = vendor.rating.count || 0;
+      const currentAvg = vendor.rating.average || 0;
+
+      const newRatingCount = currentCount + 1
+      const newAverage = (currentAvg * currentCount + ratingVal) / newRatingCount
 
       vendor.rating.average = newAverage
       vendor.rating.count = newRatingCount
 
-      // Update breakdown as well
-      const stars = Math.round(overall)
+      // Update breakdown
+      const stars = Math.round(ratingVal)
       if (stars >= 1 && stars <= 5) {
+        if (!vendor.rating.breakdown) {
+          vendor.rating.breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        }
         vendor.rating.breakdown[stars] = (vendor.rating.breakdown[stars] || 0) + 1
+        vendor.markModified('rating.breakdown')
       }
 
       await vendor.save()
@@ -610,13 +623,17 @@ router.put("/:orderId/rate", auth, async (req, res) => {
     // Update delivery partner rating
     if (order.deliveryPartnerId && delivery) {
       const deliveryPartner = await DeliveryPartner.findById(order.deliveryPartnerId)
-      if (deliveryPartner) {
-        const newRatingCount = deliveryPartner.stats.rating.count + 1
-        const newAverage =
-          (deliveryPartner.stats.rating.average * deliveryPartner.stats.rating.count + delivery) / newRatingCount
+      if (deliveryPartner && deliveryPartner.stats?.rating) {
+        const delivVal = Number(delivery);
+        const currentCount = deliveryPartner.stats.rating.count || 0;
+        const currentAvg = deliveryPartner.stats.rating.average || 0;
+
+        const newRatingCount = currentCount + 1
+        const newAverage = (currentAvg * currentCount + delivVal) / newRatingCount
 
         deliveryPartner.stats.rating.average = newAverage
         deliveryPartner.stats.rating.count = newRatingCount
+        deliveryPartner.markModified('stats.rating')
         await deliveryPartner.save()
       }
     }
