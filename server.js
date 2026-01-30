@@ -170,6 +170,32 @@ app.get("/api/health", (req, res) => {
   })
 })
 
+// Email Test Endpoint
+app.get("/api/test-email", async (req, res) => {
+  try {
+    const { sendVendorApprovalEmail } = require("./utils/emailService")
+    const mockVendor = {
+      _id: "test_vendor_" + Date.now(),
+      shopName: "Test Street Eats Vendor",
+      ownerName: "Test Owner",
+      contact: {
+        email: "jatinup1204@gmail.com",
+        phone: "9876543210"
+      },
+      cuisine: ["Test Cuisine"],
+      address: {
+        street: "Test Street",
+        city: "Test City"
+      }
+    }
+    await sendVendorApprovalEmail(mockVendor)
+    res.json({ success: true, message: "Test approval email triggered" })
+  } catch (error) {
+    console.error("Test email error:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 // ✅ Routes
 try {
   app.use("/api/auth", require("./routes/auth"))
@@ -183,6 +209,7 @@ try {
   app.use("/api/gifts", require("./routes/gifts"))
   app.use("/api/upload", require("./routes/upload"))
   app.use("/api/reviews", require("./routes/reviews"))
+  app.use("/api/users", require("./routes/users")) // Added users route
 } catch (err) {
   console.error("❌ Failed to load routes:", err.message)
 }

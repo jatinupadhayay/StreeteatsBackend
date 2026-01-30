@@ -29,7 +29,22 @@ const userSchema = new mongoose.Schema(
       match: [/^[0-9]{10}$/, "Please enter a valid 10-digit phone number"],
     },
 
-    // Address Information
+    // Address Information - Support multiple addresses
+    addresses: [
+      {
+        label: { type: String, default: "Home" }, // Home, Work, Other
+        street: { type: String, required: true },
+        city: { type: String, required: true },
+        state: { type: String, required: true },
+        pincode: { type: String, required: true },
+        coordinates: {
+          type: [Number], // [longitude, latitude]
+          default: [0, 0],
+        },
+        isDefault: { type: Boolean, default: false }
+      }
+    ],
+    // Legacy single address (keep for backward compatibility if needed, or deprecate)
     address: {
       street: { type: String, default: "" },
       city: { type: String, default: "" },
