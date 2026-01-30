@@ -47,6 +47,9 @@ async function performSearch({
       { "address.city": regex },
       { "address.state": regex },
       { "address.pincode": regex },
+      { "menu.name": regex },
+      { "menu.description": regex },
+      { "menu.category": regex },
     ]
   }
 
