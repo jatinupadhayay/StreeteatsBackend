@@ -41,7 +41,6 @@ const vendorSchema = new mongoose.Schema(
     cuisine: [
       {
         type: String,
-        required: true,
       },
     ],
     specialties: [String],
@@ -55,10 +54,10 @@ const vendorSchema = new mongoose.Schema(
 
     // Location Details
     address: {
-      street: { type: String, required: true },
-      city: { type: String, required: true },
-      state: { type: String, required: true },
-      pincode: { type: String, required: true },
+      street: { type: String },
+      city: { type: String },
+      state: { type: String },
+      pincode: { type: String },
       landmark: String,
       coordinates: {
         type: [Number], // [longitude, latitude]
@@ -70,8 +69,8 @@ const vendorSchema = new mongoose.Schema(
 
     // Contact Information
     contact: {
-      phone: { type: String, required: true },
-      email: { type: String, required: true },
+      phone: { type: String },
+      email: { type: String },
       whatsapp: String,
       website: String,
       socialMedia: {
@@ -83,12 +82,12 @@ const vendorSchema = new mongoose.Schema(
 
     // Business Documents & Legal
     businessDetails: {
-      licenseNumber: { type: String, required: true },
+      licenseNumber: { type: String },
       gstNumber: String,
       fssaiNumber: String,
       panNumber: String,
-      bankAccount: { type: String, required: true },
-      ifscCode: { type: String, required: true },
+      bankAccount: { type: String },
+      ifscCode: { type: String },
       accountHolderName: String,
       upiId: String,
       upiName: String,
@@ -177,6 +176,8 @@ const vendorSchema = new mongoose.Schema(
           },
         ],
         tags: [String],
+        stock: { type: Number, default: 0 },
+        lowStockThreshold: { type: Number, default: 5 },
         createdAt: { type: Date, default: Date.now },
         updatedAt: { type: Date, default: Date.now },
       },

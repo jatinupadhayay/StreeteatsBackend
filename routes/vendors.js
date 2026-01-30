@@ -204,6 +204,19 @@ router.get("/trending/dishes", async (req, res, next) => {
   }
 })
 
+// GET CURRENT VENDOR PROFILE
+router.get("/profile/me", auth, async (req, res, next) => {
+  try {
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) return next(new ErrorHandler("Vendor profile not found", 404))
+    res.json({ success: true, vendor })
+  } catch (error) {
+    console.error("Get profile error:", error)
+    next(new ErrorHandler("Failed to fetch profile", 500))
+  }
+})
+
 // GET VENDOR DASHBOARD
 router.get("/dashboard/stats", auth, async (req, res, next) => {
   try {
@@ -263,6 +276,8 @@ router.get("/dashboard/stats", auth, async (req, res, next) => {
       vendor: {
         id: vendor._id,
         shopName: vendor.shopName,
+        isActive: vendor.isActive,
+        status: vendor.status,
         stats: vendor.stats || {},
         menu: vendor.menu || []
       },
@@ -412,6 +427,8 @@ router.put("/profile", auth, upload.fields([{ name: "shopImage", maxCount: 1 }, 
     const vendor = await Vendor.findOne({ userId: req.user.userId })
     if (!vendor) return next(new ErrorHandler("Profile not found", 404))
 
+    console.log("Updating profile for vendor:", vendor._id);
+
     if (req.files?.shopImage?.[0]) vendor.images.shop = (await cloudinary.uploader.upload(req.files.shopImage[0].path, { folder: "street-eats" })).secure_url
     if (req.files?.gallery) {
       const results = await Promise.all(req.files.gallery.map(f => cloudinary.uploader.upload(f.path, { folder: "street-eats" })))
@@ -419,32 +436,57 @@ router.put("/profile", auth, upload.fields([{ name: "shopImage", maxCount: 1 }, 
     }
 
     const updateData = req.body
-    if (updateData.cuisine) vendor.cuisine = typeof updateData.cuisine === 'string' ? updateData.cuisine.split(',').map(c => c.trim()) : updateData.cuisine
+
+    if (updateData.operationalHours && typeof updateData.operationalHours === 'string') {
+      try {
+        vendor.operationalHours = JSON.parse(updateData.operationalHours)
+      } catch (e) {
+        console.error("Failed to parse operationalHours:", e)
+      }
+    }
 
     Object.entries(updateData).forEach(([key, value]) => {
-      if (['cuisine', 'images'].includes(key)) return
+      if (['cuisine', 'images', 'operationalHours'].includes(key)) return
+      // Skip empty values for critical fields if necessary, or let mongoose handle validation
       if (key.includes('.')) {
         const keys = key.split('.')
         let t = vendor
-        for (let i = 0; i < keys.length - 1; i++) { t[keys[i]] = t[keys[i]] || {}; t = t[keys[i]] }
+        for (let i = 0; i < keys.length - 1; i++) {
+          if (!t[keys[i]]) t[keys[i]] = {};
+          t = t[keys[i]]
+        }
         t[keys[keys.length - 1]] = value
-      } else { vendor[key] = value }
+      } else {
+        vendor[key] = value
+      }
     })
+
+    if (updateData.cuisine) {
+      vendor.cuisine = typeof updateData.cuisine === 'string' ? updateData.cuisine.split(',').map(c => c.trim()) : updateData.cuisine
+    }
 
     await vendor.save()
     res.json({ success: true, message: "Profile updated", vendor })
-  } catch (error) { next(error) }
+  } catch (error) {
+    console.error("Profile update error:", error);
+    next(new ErrorHandler(error.message || "Failed to update profile", 500));
+  }
 })
 
 // TOGGLE STATUS
 router.put("/toggle-status", auth, async (req, res, next) => {
   try {
-    if (req.user.role !== "vendor") return next(new ErrorHandler("Access denied.", 403))
+    if (!req.user?.isVendor) return next(new ErrorHandler("Access denied.", 403))
     const vendor = await Vendor.findOne({ userId: req.user.userId })
+    if (!vendor) return next(new ErrorHandler("Vendor profile not found", 404))
+
     vendor.isActive = !vendor.isActive
     await vendor.save()
     res.json({ success: true, isActive: vendor.isActive })
-  } catch (error) { next(error) }
+  } catch (error) {
+    console.error("Toggle status error:", error);
+    next(new ErrorHandler("Failed to toggle status", 500));
+  }
 })
 
 // MENU MGMT
@@ -454,7 +496,12 @@ router.post("/menu", auth, upload.single("itemImage"), async (req, res, next) =>
     const vendor = await Vendor.findOne({ userId: req.user.userId })
     let imageUrl = ""
     if (req.file) imageUrl = (await cloudinary.uploader.upload(req.file.path, { folder: "street-eats" })).secure_url
-    const item = { ...req.body, price: parseFloat(req.body.price), image: imageUrl, isAvailable: true }
+    const itemData = { ...req.body }
+    if (itemData.stock) itemData.stock = parseInt(itemData.stock)
+    if (itemData.lowStockThreshold) itemData.lowStockThreshold = parseInt(itemData.lowStockThreshold)
+    if (itemData.price) itemData.price = parseFloat(itemData.price)
+
+    const item = { ...itemData, image: imageUrl, isAvailable: true }
     vendor.menu.push(item)
     await vendor.save()
     res.status(201).json({ success: true, menuItem: vendor.menu[vendor.menu.length - 1] })
@@ -467,7 +514,12 @@ router.put("/menu/:itemId", auth, upload.single("itemImage"), async (req, res, n
     const vendor = await Vendor.findOne({ userId: req.user.userId })
     const item = vendor.menu.id(req.params.itemId)
     if (req.file) item.image = (await cloudinary.uploader.upload(req.file.path, { folder: "street-eats" })).secure_url
-    Object.assign(item, req.body)
+    const itemData = { ...req.body }
+    if (itemData.stock) itemData.stock = parseInt(itemData.stock)
+    if (itemData.lowStockThreshold) itemData.lowStockThreshold = parseInt(itemData.lowStockThreshold)
+    if (itemData.price) itemData.price = parseFloat(itemData.price)
+
+    Object.assign(item, itemData)
     await vendor.save()
     res.json({ success: true, menuItem: item })
   } catch (error) { next(error) }
