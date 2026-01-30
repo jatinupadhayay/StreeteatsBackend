@@ -92,6 +92,9 @@ router.post(
         deliveryRadius,
       } = req.body
 
+      console.log("📥 Incoming Vendor Registration Payload:", JSON.stringify(req.body, null, 2));
+      console.log("📁 Uploaded Files:", Object.keys(req.files || {}).map(k => ({ field: k, name: req.files[k][0].originalname })));
+
       // Validation
       if (!ownerName || !email || !password || !phone || !shopName) {
         return res.status(400).json({ message: "Required fields are missing" })
@@ -154,8 +157,13 @@ router.post(
           ifscCode: ifscCode || "",
         },
         operationalHours: {
-          opening: openingTime || "09:00",
-          closing: closingTime || "22:00",
+          monday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          tuesday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          wednesday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          thursday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          friday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          saturday: { open: openingTime || "09:00", close: closingTime || "22:00" },
+          sunday: { open: openingTime || "09:00", close: closingTime || "22:00" },
         },
         deliveryRadius: Number.parseInt(deliveryRadius) || 5,
         images: {

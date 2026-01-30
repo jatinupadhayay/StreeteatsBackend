@@ -173,7 +173,7 @@ const sendVendorApprovalEmail = async (vendor) => {
 
     const mailOptions = {
       from: process.env.SMTP_USER,
-      to: "jatinup1204@gmail.com", // Admin email
+      to: process.env.ADMIN_EMAIL || "jatinup1204@gmail.com", // Admin email
       subject: "New Vendor Registration - Approval Required",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -200,10 +200,11 @@ const sendVendorApprovalEmail = async (vendor) => {
       `,
     }
 
-    await transporter.sendMail(mailOptions)
-    console.log("Vendor approval email sent to admin")
+    const result = await transporter.sendMail(mailOptions)
+    console.log("Vendor approval email sent to admin:", result.messageId)
   } catch (error) {
     console.error("Vendor approval email error:", error.message)
+    if (error.stack) console.error(error.stack)
   }
 }
 
