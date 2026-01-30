@@ -496,4 +496,48 @@ router.put("/:id/like", auth, async (req, res, next) => {
   } catch (error) { next(error) }
 })
 
+// TOGGLE VENDOR ACTIVE STATUS
+router.put("/toggle-status", auth, async (req, res, next) => {
+  try {
+    console.log("Toggle status called. User:", req.user)
+    console.log("Is vendor?", req.user?.isVendor)
+    console.log("User role:", req.user?.role)
+
+    if (!req.user?.isVendor) {
+      console.log("Access denied - not a vendor")
+      return next(new ErrorHandler("Access denied. Vendor only.", 403))
+    }
+
+    const vendor = await Vendor.findOne({ userId: req.user.userId })
+    console.log("Found vendor:", vendor ? vendor._id : "NOT FOUND")
+
+    if (!vendor) {
+      return next(new ErrorHandler("Vendor profile not found", 404))
+    }
+
+    // Toggle the isActive status
+    vendor.isActive = !vendor.isActive
+    await vendor.save()
+
+    console.log("Toggled to:", vendor.isActive)
+    console.log("Sending response with vendor object")
+
+    const responseData = {
+      success: true,
+      message: `Shop is now ${vendor.isActive ? "online" : "offline"}`,
+      vendor: {
+        _id: vendor._id,
+        isActive: vendor.isActive,
+        shopName: vendor.shopName
+      }
+    }
+
+    console.log("Response data:", JSON.stringify(responseData))
+    res.json(responseData)
+  } catch (error) {
+    console.error("Toggle status error:", error)
+    next(new ErrorHandler("Failed to toggle status", 500))
+  }
+})
+
 module.exports = router

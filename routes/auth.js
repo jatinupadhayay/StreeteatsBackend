@@ -357,6 +357,31 @@ router.post("/login", async (req, res) => {
           status: vendor.status,
         })
       }
+
+      // Return vendor details for frontend
+      const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
+
+      user.lastLogin = new Date()
+      await user.save()
+
+      return res.json({
+        message: "Login successful",
+        token,
+        user: {
+          id: user._id,
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+        },
+        vendor: {
+          _id: vendor._id,
+          status: vendor.status,
+          shopName: vendor.shopName,
+          isActive: vendor.isActive
+        }
+      })
     }
 
     if (role === "delivery") {

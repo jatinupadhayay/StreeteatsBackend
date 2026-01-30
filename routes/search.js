@@ -132,8 +132,8 @@ async function performSearch({
 
         const matches = regex
           ? regex.test(item.name) ||
-            (!!item.description && regex.test(item.description)) ||
-            (!!item.category && regex.test(item.category))
+          (!!item.description && regex.test(item.description)) ||
+          (!!item.category && regex.test(item.category))
           : item.isPopular || item.isFeatured
 
         if (!matches) {
