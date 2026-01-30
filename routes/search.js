@@ -155,15 +155,42 @@ async function performSearch({
           category: item.category,
           isVeg: item.isVeg,
           isAvailable: item.isAvailable,
+          isPopular: item.isPopular || false,
+          totalOrders: item.totalOrders || 0,
           vendor: {
             id: vendor._id,
             shopName: vendor.shopName,
             rating: vendor.rating,
             distanceKm: formatDistance(distanceKm),
           },
+          _sortDistance: distanceKm ?? Number.POSITIVE_INFINITY,
         })
       })
     })
+
+    // Sort dishes: nearby vendors first, then by popularity (totalOrders)
+    dishResults.sort((a, b) => {
+      // First priority: distance (nearby vendors first)
+      const distDiff = a._sortDistance - b._sortDistance
+      if (Math.abs(distDiff) > 0.1) {
+        return distDiff
+      }
+
+      // Second priority: total orders (popular dishes first)
+      const orderDiff = (b.totalOrders || 0) - (a.totalOrders || 0)
+      if (orderDiff !== 0) {
+        return orderDiff
+      }
+
+      // Third priority: isPopular flag
+      if (b.isPopular && !a.isPopular) return 1
+      if (a.isPopular && !b.isPopular) return -1
+
+      return 0
+    })
+
+    // Remove the temporary sort field
+    dishResults.forEach(dish => delete dish._sortDistance)
 
     if (dishResults.length === 0 && sourceVendors.length > 0) {
       fallbackUsed = true
