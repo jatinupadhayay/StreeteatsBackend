@@ -121,7 +121,18 @@ async function performSearch({
   const dishResults = []
   if (dishLimit > 0) {
     const seen = new Set()
-    const sourceVendors = effectiveVendors.slice(0, Math.max(vendorLimit, 12))
+    // Use matching vendors from specific query, or all vendors if no specific vendor query matched
+    // We use vendorMap values to access all vendors with their calculated distances
+    // This ensures we find dishes even if the vendor is outside the strict radius filter
+    let sourceVendors = Array.from(vendorMap.values())
+
+    // Sort vendors by reliability/distance before searching dishes to prioritize better sources
+    sourceVendors.sort((a, b) => {
+      if (hasLocation) {
+        return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity)
+      }
+      return 0
+    })
 
     sourceVendors.forEach(({ vendor, distanceKm }) => {
       const menu = vendor.menu || []
