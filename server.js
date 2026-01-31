@@ -196,6 +196,44 @@ app.get("/api/test-email", async (req, res) => {
   }
 })
 
+// SMTP Connection Test Endpoint
+app.get("/api/test-smtp", async (req, res) => {
+  try {
+    const { testEmailConnection } = require("./utils/emailService")
+    const transporter = require("nodemailer").createTransport({
+      host: process.env.SMTP_HOST || "smtp.gmail.com",
+      port: process.env.SMTP_PORT || 587,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+      debug: true, // Enable debug
+      logger: true // Log to console
+    })
+
+    await transporter.verify()
+    res.json({
+      success: true,
+      message: "SMTP Connection Successful",
+      config: {
+        host: process.env.SMTP_HOST,
+        user: process.env.SMTP_USER,
+        port: process.env.SMTP_PORT
+      }
+    })
+  } catch (error) {
+    console.error("SMTP Connection Test Failed:", error)
+    res.status(500).json({
+      success: false,
+      message: "SMTP Connection Failed",
+      error: error.message,
+      code: error.code,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined
+    })
+  }
+})
+
 // ✅ Routes
 try {
   app.use("/api/auth", require("./routes/auth"))

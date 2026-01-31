@@ -5,12 +5,15 @@ const createTransporter = () => {
   return nodemailer.createTransport({
     // Changed from createTransporter to createTransport
     host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: process.env.SMTP_PORT || 587,
-    secure: false,
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false, // true for 465, false for other ports
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    tls: {
+      rejectUnauthorized: false // Helps in environments with proxy/cert issues
+    }
   })
 }
 
@@ -34,7 +37,7 @@ const testEmailConnection = async () => {
 const sendWelcomeEmail = async (email, name, role) => {
   try {
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.log("Email service not configured, skipping email send")
+      console.warn("⚠️  Email service not configured. Missing SMTP_USER or SMTP_PASS environment variables.");
       return
     }
 
@@ -166,6 +169,7 @@ const sendOrderStatusEmail = async (email, order) => {
 const sendVendorApprovalEmail = async (vendor) => {
   try {
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn("⚠️  Skipping Vendor Approval Email: SMTP not configured.");
       return
     }
 
@@ -202,9 +206,10 @@ const sendVendorApprovalEmail = async (vendor) => {
 
     const result = await transporter.sendMail(mailOptions)
     console.log("Vendor approval email sent to admin:", result.messageId)
+    return result
   } catch (error) {
     console.error("Vendor approval email error:", error.message)
-    if (error.stack) console.error(error.stack)
+    throw error // Bubble up the error
   }
 }
 
@@ -248,7 +253,7 @@ const sendPasswordResetOTP = async (email, otp) => {
     return { success: true, mode: "real" }
   } catch (error) {
     console.error("OTP email sending error:", error.message)
-    return { success: false, error: error.message }
+    throw error // Bubble up
   }
 }
 
