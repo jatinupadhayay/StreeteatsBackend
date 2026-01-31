@@ -193,7 +193,7 @@ const sendVendorApprovalEmail = async (vendor) => {
           </div>
           
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${process.env.BACKEND_URL || process.env.PUBLIC_URL || 'http://localhost:5000'}/api/auth/approve-vendor/${vendor._id}" 
+            <a href="${process.env.BACKEND_URL || process.env.PUBLIC_URL || 'http://localhost:5000/api'}/auth/approve-vendor/${vendor._id}" 
                style="background-color: #ff6b35; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
                Approve Vendor Now
             </a>

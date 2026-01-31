@@ -271,7 +271,6 @@ const vendorSchema = new mongoose.Schema(
       conversionRate: { type: Number, default: 0 },
       popularItems: [String],
       peakHours: [String],
-      topCustomers: [mongoose.Schema.Types.ObjectId],
       likes: { type: Number, default: 0 },
       shares: { type: Number, default: 0 },
     },

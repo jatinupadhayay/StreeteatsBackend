@@ -356,10 +356,9 @@ router.put("/:orderId/status", auth, async (req, res) => {
       // ✅ Emit vendor-side update
       if (order.vendorId) {
         const vendorIdString = order.vendorId._id ? order.vendorId._id.toString() : order.vendorId.toString();
-        console.log("📤 Emitting 'order-status-updated' to", `vendor-${vendorIdString}`)
+        console.log("📤 Emitting 'order_status_updated' to", `vendor-${vendorIdString}`)
 
-        // When updating order status
-        io.to(`vendor-${vendorIdString}`).emit("order-status-updated", {
+        io.to(`vendor-${vendorIdString}`).emit("order_status_updated", {
           orderId: order._id,
           status: order.status,
           message: getStatusMessage(status, order.orderType),
@@ -374,20 +373,25 @@ router.put("/:orderId/status", auth, async (req, res) => {
       }
 
       // ✅ Emit customer-side update
-      if (order.customerId && order.customerId._id) {
-        io.to(`customer-${order.customerId._id}`).emit("order-status-updated", {
+      if (order.customerId && (order.customerId._id || order.customerId)) {
+        const custId = order.customerId._id || order.customerId;
+        console.log("📤 Emitting 'order_status_updated' to", `customer-${custId}`)
+        io.to(`customer-${custId}`).emit("order_status_updated", {
           orderId: order._id,
           status: order.status,
           message: getStatusMessage(status, order.orderType),
+          order: enrichedOrder, // Added full order object for toasts
         })
       }
 
       // ✅ Emit delivery-side update
       if (order.deliveryPartnerId) {
         const dpId = order.deliveryPartnerId._id || order.deliveryPartnerId;
-        io.to(`delivery-${dpId}`).emit("order-status-updated", {
+        console.log("📤 Emitting 'order_status_updated' to", `delivery-${dpId}`)
+        io.to(`delivery-${dpId}`).emit("order_status_updated", {
           orderId: order._id,
           status: order.status,
+          order: enrichedOrder,
         })
       }
     }
