@@ -93,17 +93,18 @@ router.post(
       } = req.body
 
       console.log("📥 Incoming Vendor Registration Payload:", JSON.stringify(req.body, null, 2));
-      console.log("📁 Uploaded Files:", Object.keys(req.files || {}).map(k => ({ field: k, name: req.files[k][0].originalname })));
+      console.log("📁 Uploaded Files:", req.files ? Object.keys(req.files).map(k => ({ field: k, name: req.files[k][0]?.originalname })) : "None");
 
       // Validation
       if (!ownerName || !email || !password || !phone || !shopName) {
         return res.status(400).json({ message: "Required fields are missing" })
       }
 
-      // Check if vendor already exists
-      const existingUser = await User.findOne({ email })
-      if (existingUser) {
-        return res.status(400).json({ message: "Vendor already exists with this email" })
+      // Check if vendor already exists by email or phone
+      const userExists = await User.findOne({ $or: [{ email }, { phone }] })
+      if (userExists) {
+        const field = userExists.email === email ? "email" : "phone"
+        return res.status(400).json({ message: `Vendor already exists with this ${field}` })
       }
 
       // Hash password
@@ -138,7 +139,7 @@ router.post(
         ownerName,
         shopName,
         shopDescription,
-        cuisine: cuisine ? cuisine.split(",").map((c) => c.trim()) : [],
+        cuisine: Array.isArray(cuisine) ? cuisine : (cuisine ? cuisine.split(",").map((c) => c.trim()) : []),
         address: {
           street: street || "",
           city: city || "",
@@ -167,7 +168,7 @@ router.post(
         },
         deliveryRadius: Number.parseInt(deliveryRadius) || 5,
         images: {
-          shop: shopImage,
+          shop: shopImage ? [shopImage] : [],
           license: licenseDocument,
           owner: ownerPhoto,
         },
@@ -197,7 +198,31 @@ router.post(
       })
     } catch (error) {
       console.error("Vendor registration error:", error)
-      res.status(500).json({ message: "Vendor registration failed", error: error.message })
+
+      // Attempt to cleanup user if vendor creation failed
+      if (typeof vendorUser !== 'undefined' && vendorUser._id) {
+        try {
+          await User.findByIdAndDelete(vendorUser._id);
+          console.log("Cleanup: Deleted orphaned user after vendor creation failure");
+        } catch (cleanupErr) {
+          console.error("Cleanup failed:", cleanupErr.message);
+        }
+      }
+
+      if (error.name === "ValidationError") {
+        const messages = Object.values(error.errors).map((val) => val.message);
+        return res.status(400).json({
+          message: "Validation failed",
+          details: messages,
+          error: error.message
+        });
+      }
+
+      res.status(500).json({
+        message: "Vendor registration failed",
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      })
     }
   },
 )
