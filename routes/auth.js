@@ -27,11 +27,16 @@ router.post("/register/customer", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 12)
 
+    const sanitizedPhone = phone.toString().replace(/\D/g, "");
+    if (sanitizedPhone.length !== 10) {
+      return res.status(400).json({ message: "Phone number must be exactly 10 digits" });
+    }
+
     const customer = new User({
       name,
-      email,
+      email: email.toLowerCase(),
       password: hashedPassword,
-      phone,
+      phone: sanitizedPhone,
       address,
       role: "customer",
       isVerified: true,
@@ -100,10 +105,18 @@ router.post(
         return res.status(400).json({ message: "Required fields are missing" })
       }
 
+      // Sanitize phone number (remove non-digits, ensure it's a string)
+      const sanitizedPhone = phone.toString().replace(/\D/g, "");
+
+      // Basic check before DB hit
+      if (sanitizedPhone.length !== 10) {
+        return res.status(400).json({ message: "Phone number must be exactly 10 digits" });
+      }
+
       // Check if vendor already exists by email or phone
-      const userExists = await User.findOne({ $or: [{ email }, { phone }] })
+      const userExists = await User.findOne({ $or: [{ email: email.toLowerCase() }, { phone: sanitizedPhone }] })
       if (userExists) {
-        const field = userExists.email === email ? "email" : "phone"
+        const field = userExists.email.toLowerCase() === email.toLowerCase() ? "email" : "phone"
         return res.status(400).json({ message: `Vendor already exists with this ${field}` })
       }
 
@@ -113,9 +126,9 @@ router.post(
       // Create user account for vendor
       const vendorUser = new User({
         name: ownerName,
-        email,
+        email: email.toLowerCase(),
         password: hashedPassword,
-        phone,
+        phone: sanitizedPhone,
         role: "vendor",
         isVerified: false,
       })
@@ -148,8 +161,8 @@ router.post(
           coordinates: [0, 0],
         },
         contact: {
-          phone,
-          email,
+          phone: sanitizedPhone,
+          email: email.toLowerCase(),
         },
         businessDetails: {
           licenseNumber: licenseNumber || "",
