@@ -101,23 +101,34 @@ router.post(
       console.log("📁 Uploaded Files:", req.files ? Object.keys(req.files).map(k => ({ field: k, name: req.files[k][0]?.originalname })) : "None");
 
       // Validation
-      if (!ownerName || !email || !password || !phone || !shopName) {
-        return res.status(400).json({ message: "Required fields are missing" })
+      const requiredFields = ['ownerName', 'email', 'password', 'phone', 'shopName', 'street', 'city', 'pincode'];
+      const missingFields = requiredFields.filter(f => !req.body[f]);
+
+      if (missingFields.length > 0) {
+        console.warn("⚠️ Registration rejected: Missing fields:", missingFields);
+        return res.status(400).json({
+          message: "Required fields are missing",
+          details: missingFields.map(f => `${f} is required`)
+        });
       }
 
-      // Sanitize phone number (remove non-digits, ensure it's a string)
-      const sanitizedPhone = phone.toString().replace(/\D/g, "");
+      // Sanitize phone number (take last 10 digits to be safe with country codes/0)
+      const rawPhone = phone.toString().replace(/\D/g, "");
+      const sanitizedPhone = rawPhone.length > 10 ? rawPhone.slice(-10) : rawPhone;
 
       // Basic check before DB hit
       if (sanitizedPhone.length !== 10) {
-        return res.status(400).json({ message: "Phone number must be exactly 10 digits" });
+        return res.status(400).json({
+          message: "Invalid phone number",
+          details: ["Phone number must be at least 10 digits long"]
+        });
       }
 
       // Check if vendor already exists by email or phone
-      const userExists = await User.findOne({ $or: [{ email: email.toLowerCase() }, { phone: sanitizedPhone }] })
+      const userExists = await User.findOne({ $or: [{ email: email.toLowerCase().trim() }, { phone: sanitizedPhone }] })
       if (userExists) {
-        const field = userExists.email.toLowerCase() === email.toLowerCase() ? "email" : "phone"
-        return res.status(400).json({ message: `Vendor already exists with this ${field}` })
+        const isEmail = userExists.email.toLowerCase() === email.toLowerCase().trim();
+        return res.status(400).json({ message: `Vendor already exists with this ${isEmail ? "email" : "phone"}` })
       }
 
       // Hash password
